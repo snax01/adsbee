@@ -125,6 +125,8 @@ bool ADSBeeServer::Update() {
         // RP2040 and SubG status are updated by the RP2040 writing to the object dictionary periodically. Nothing to do
         // here.
         SendNetworkMetricsMessage();
+        
+        transmit_can();
     }
 
     // Run raw packet ingestion and reporting if queues are >50% full or every 200ms.

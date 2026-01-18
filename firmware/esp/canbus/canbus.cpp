@@ -297,8 +297,12 @@ bool CanbusInit()   {
     vTaskDelay(pdMS_TO_TICKS(10));
     CONSOLE_INFO("CanbusInit", "CAN bus started - listening for messages...");
 
+    transmit_can();
+    
+    return true;
+}
 
-
+void transmit_can() {
     eERRORRESULT tx_result = MCP251XFD_TransmitMessageToFIFO(
         &MCP251XFD_Ext1,
         &tx_message,
@@ -311,9 +315,4 @@ bool CanbusInit()   {
     } else {
         CONSOLE_ERROR("CanbusInit", "Failed to transmit message: Error code %d", tx_result);
     }
-
-
-
-    
-    return true;
 }
