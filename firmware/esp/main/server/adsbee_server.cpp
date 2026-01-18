@@ -9,6 +9,8 @@
 #include "task_priorities.hh"
 #include "unit_conversions.hh"
 
+#include "../canbus/canbus.hh"
+
 // #define VERBOSE_DEBUG
 
 static const uint16_t kGDL90Port = 4000;
@@ -90,6 +92,8 @@ bool ADSBeeServer::Init() {
                 xSemaphoreGive(settings_read_semaphore);
             },
     });  // Require ack.
+
+    CanbusInit();
 
     // Wait for the callback to complete
     xSemaphoreTake(settings_read_semaphore, portMAX_DELAY);

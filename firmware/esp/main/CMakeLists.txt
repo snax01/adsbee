@@ -25,6 +25,8 @@ idf_component_register(
         "peripherals/pico"
         "server"
         "target_test"
+        "../canbus"
+        "../canbus/driver"
     INCLUDE_DIRS
         "."
         "../../common"
@@ -47,6 +49,8 @@ idf_component_register(
         "peripherals/pico"
         "server"
         "target_test"
+        "../canbus"
+        "../canbus/driver"
     EMBED_TXTFILES
         "server/web/index.html"
         "server/web/style.css"
