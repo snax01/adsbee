@@ -125,8 +125,6 @@ bool ADSBeeServer::Update() {
         // RP2040 and SubG status are updated by the RP2040 writing to the object dictionary periodically. Nothing to do
         // here.
         SendNetworkMetricsMessage();
-        
-        transmit_can();
     }
 
     // Run raw packet ingestion and reporting if queues are >50% full or every 200ms.
@@ -144,6 +142,10 @@ bool ADSBeeServer::Update() {
             CONSOLE_ERROR("ADSBeeServer::Update", "Raw packets buffer not allocated. Cannot process packets.");
             return false;
         }
+
+        transmit_can();
+
+        CONSOLE_WARNING("CANBUS", "Are we talking\n");
 
         // Assemble a CompositeArray of transponder packets to report.
         // NOTE: Rate metering of raw packets is done by upstream RP2040, which only forward packets on the raw
