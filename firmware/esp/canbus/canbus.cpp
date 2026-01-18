@@ -316,3 +316,12 @@ void transmit_can() {
         CONSOLE_ERROR("CanbusInit", "Failed to transmit message: Error code %d", tx_result);
     }
 }
+
+void check_can_errors() {
+    uint8_t tx_err = 0, rx_err = 0;
+    eMCP251XFD_TXRXErrorStatus err_status = MCP251XFD_RX_NO_ERROR;
+    eERRORRESULT err_result = MCP251XFD_GetTransmitReceiveErrorCountAndStatus(&MCP251XFD_Ext1, &tx_err, &rx_err, &err_status);
+    if (err_result == ERR_OK) {
+        CONSOLE_ERROR("CANBUS", "Error counters: TX=%d, RX=%d, Status=0x%02X", tx_err, rx_err, err_status);
+    }
+}
