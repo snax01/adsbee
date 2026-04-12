@@ -385,9 +385,9 @@ void DecodedUATUplinkPacket::ConstructUATUplinkPacket(bool run_fec) {
     if (run_fec) {
         // Check if the packet is valid by validating the Reed-Solomon code.
         // We don't actually know the number of bits with high certainty. First interpret as a long ADS-B message,
-        // and if that doesn't work, try it as a short ADS-B message. Decoding only available on CC1312 and in
-        // non-embedded unit tests.
-#if defined(ON_TI) || defined(ON_HOST)
+        // and if that doesn't work, try it as a short ADS-B message. FEC decode is enabled on CC1312, ESP32,
+        // and host unit tests.
+#if defined(ON_TI) || defined(ON_HOST) || defined(ON_ESP32)
         // Copy to the decoded_payload buffer and correct in place. If correction fails, the buffer will not be
         // modified.
         memcpy(decoded_payload, raw.encoded_message, RawUATUplinkPacket::kUplinkMessageNumBytes);
@@ -398,7 +398,7 @@ void DecodedUATUplinkPacket::ConstructUATUplinkPacket(bool run_fec) {
             is_valid = false;
             return;
         }
-#endif /* ON_PICO */
+#endif
     }
 
     // TODO: extract info.

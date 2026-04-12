@@ -118,12 +118,6 @@ uint16_t GDL90Reporter::WriteGDL90UplinkDataMessage(uint8_t* to_buf, uint16_t to
         return 0;
     }
 
-    // We can't use the standard WriteGDL90Message function here because the uplink payload may be too long to create a
-    // separate buffer for. Instead, we will manually send the flag byte and then write escaped bit fields using the
-    // WriteBufferWithGDL90Escapes function.
-    uint16_t bytes_written = 0;
-    to_buf[bytes_written++] = kGDL90FlagByte;  // Beginning flag byte.
-
     const uint16_t kHeaderBufLenBytes = sizeof(GDL90MessageID) + 3;
     uint8_t header_buf[kHeaderBufLenBytes];
     header_buf[0] = kGDL90MessageIDUplinkData;
@@ -131,12 +125,18 @@ uint16_t GDL90Reporter::WriteGDL90UplinkDataMessage(uint8_t* to_buf, uint16_t to
     header_buf[2] = (tor_80ns_ticks >> 8) & 0xFF;
     header_buf[3] = (tor_80ns_ticks >> 16) & 0xFF;
 
+    uint8_t unescaped_for_crc[kHeaderBufLenBytes + kUplinkDataMessagePayloadLenBytes];
+    memcpy(unescaped_for_crc, header_buf, kHeaderBufLenBytes);
+    memcpy(unescaped_for_crc + kHeaderBufLenBytes, uplink_payload, uplink_payload_len_bytes);
+    uint16_t crc = CalculateGDL90CRC16(unescaped_for_crc, kHeaderBufLenBytes + uplink_payload_len_bytes);
+    uint16_t bytes_written = 0;
+    to_buf[bytes_written++] = kGDL90FlagByte;
+
     bytes_written += WriteBufferWithGDL90Escapes(to_buf + bytes_written, to_buf_num_bytes - bytes_written, header_buf,
                                                  kHeaderBufLenBytes);
     bytes_written += WriteBufferWithGDL90Escapes(to_buf + bytes_written, to_buf_num_bytes - bytes_written,
                                                  uplink_payload, uplink_payload_len_bytes);
-    // Calculate the CRC with unescaped message ID and data (not the initial flag byte).
-    uint16_t crc = CalculateGDL90CRC16(to_buf + 1, bytes_written - 1);  // Exclude starting flag byte.
+
     uint8_t crc_buf[sizeof(crc)] = {static_cast<uint8_t>(crc & 0xFF), static_cast<uint8_t>(crc >> 8)};  // LSB first.
     bytes_written +=
         WriteBufferWithGDL90Escapes(to_buf + bytes_written, to_buf_num_bytes - bytes_written, crc_buf, sizeof(crc));
