@@ -391,6 +391,8 @@ void DecodedUATUplinkPacket::ConstructUATUplinkPacket(bool run_fec) {
         // Copy to the decoded_payload buffer and correct in place. If correction fails, the buffer will not be
         // modified.
         memcpy(decoded_payload, raw.encoded_message, RawUATUplinkPacket::kUplinkMessageNumBytes);
+#endif
+#if defined(ON_TI) || defined(ON_HOST)
         raw.sigq_bits = uat_rs.DecodeUplinkMessage(decoded_payload, raw.encoded_message);
         if (raw.sigq_bits >= 0) {
             CONSOLE_INFO("DecodedUATADSBPacket", "Decoded UAT uplink message with %d bytes corrected.", raw.sigq_bits);
