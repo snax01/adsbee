@@ -23,4 +23,9 @@ static const unsigned int kHTTPServerStackSizeBytes =
 static const unsigned int kDeviceStatusUpdateTaskStackSizeBytes = 2048;
 static const unsigned int kDeviceStatusUpdateTaskPriority = tskIDLE_PRIORITY;
 
+// RAD AERO
+static const unsigned int kCanbusTaskStackSizeBytes = 2048 * 4;
+static const unsigned int kCanbusTaskPriority = 5;
+// RAD AERO
+
 #endif /* TASK_PRIORITIES_HH_ */

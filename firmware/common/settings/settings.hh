@@ -74,7 +74,7 @@ class SettingsManager {
         static const uint16_t kPositionSourceStrMaxLen = 32;
         static const char kPositionSourceStrs[kNumPositionSources][kPositionSourceStrMaxLen];
 
-        PositionSource source = kPositionSourceLowestAircraft;
+        PositionSource source = kPositionSourceNone;
         float latitude_deg = 0.0;      // Degrees, WGS84
         float longitude_deg = 0.0;     // Degrees, WGS84
         int32_t gnss_altitude_ft = 0;  // Meters, WGS84
@@ -137,10 +137,11 @@ class SettingsManager {
                 memset(wifi_ap_password, '\0', sizeof(wifi_ap_password));
                 memset(wifi_sta_ssid, '\0', sizeof(wifi_sta_ssid));
                 memset(wifi_sta_password, '\0', sizeof(wifi_sta_password));
-
-                strncpy(hostname, "ADSBee1090",
+// RAD AERO
+                strncpy(hostname, "RADaero",
                         sizeof(hostname));  // Default hostname, will be overridden when DeviceInfo is set.
             }
+// RAD AERO
 
             uint32_t CalculateCRC32() {
                 // Don't calculate checksum including the crc32 field itself, silly.
@@ -217,7 +218,7 @@ class SettingsManager {
                 device_info.GetDefaultSSID(core_network_settings.wifi_ap_ssid);
                 // Reuse the WiFi SSID as the hostname.
                 strncpy(core_network_settings.hostname, core_network_settings.wifi_ap_ssid, 32);
-                snprintf(core_network_settings.wifi_ap_password, kWiFiPasswordMaxLen, "yummyflowers");
+                snprintf(core_network_settings.wifi_ap_password, kWiFiPasswordMaxLen, "fishfinder");
             }
 
             core_network_settings.wifi_ap_channel =
@@ -238,6 +239,8 @@ class SettingsManager {
 #endif
             }
 
+// RAD AERO            
+/*  Disable Feeds by default
             // Set default feed URIs.
             // adsb.fi: feed.adsb.fi:30004, Beast
             strncpy(feed_uris[kMaxNumFeeds - 1], "feed.adsb.fi", kFeedURIMaxNumChars);
@@ -263,6 +266,8 @@ class SettingsManager {
             feed_ports[kMaxNumFeeds - 4] = 30004;
             feed_is_active[kMaxNumFeeds - 4] = true;
             feed_protocols[kMaxNumFeeds - 4] = kBeast;
+*/
+// RAD AERO
         }
     };
 
@@ -305,7 +310,8 @@ class SettingsManager {
             }
         }
 
-        static constexpr uint16_t kDefaultSSIDLenChars = 24;  // ADSBee1090-YYYMMDDVVXXXX
+// RAD AERO
+        static constexpr uint16_t kDefaultSSIDLenChars = 15;  // ADSBee1090-YYYMMDDVVXXXX
         /**
          * Writes a default value for a network SSID to a buffer. The buffer must be at least kDefaultSSIDLenChars+1 so
          * that there is space for an end of string character. This default network SSID value is intended to not
@@ -313,11 +319,11 @@ class SettingsManager {
          * @param[out] buf Buffer to write the network SSID to.
          */
         void GetDefaultSSID(char* buf) {
-            memcpy(buf, "ADSBee1090-", 11);       // [0:10] ADSBee1090-
-            memcpy(buf + 11, part_code + 12, 7);  // [11:17] YYYMMDD
-            memcpy(buf + 18, part_code + 20, 6);  // [18:23] VVXXXX
-            buf[kDefaultSSIDLenChars] = '\0';
+            memcpy(buf, "RADaero-", 8);       // [0:7] RADaero-
+            memcpy(buf + 8, part_code + 20, 6);  // [8:13] VVXXXX
+            buf[14] = '\0';
         }
+// RAD AERO
 
         /**
          * Writes a default 8 Byte Unique ID to a buffer. The buffer must be at least 8 Bytes long. UID is in binary

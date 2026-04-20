@@ -12,6 +12,15 @@
 #include "nasa_cpr.hh"
 #include "unit_conversions.hh"
 
+// RAD AERO
+#ifdef ON_ESP32
+QueueHandle_t CAN_msg_tx_queue;
+
+#include "comms/comms_canbus.hh"
+queue_msg_t queue_out_buf = { 0 };
+#endif
+// RAD AERO
+
 const float kDegreesPerRadian = 360.0f / (2.0f * M_PI);
 
 // This velocity determines the maximum distance an aircraft can jump between position updates without its new position
@@ -1674,6 +1683,21 @@ bool AircraftDictionary::IngestModeSADSBPacket(const ModeSADSBPacket& packet) {
     }
     if (ret) {
         aircraft_ptr->IncrementNumFramesReceived(true);  // Count the received Mode S frame.
+
+
+// RAD AERO
+        #ifdef ON_ESP32
+        //if (efis_connected) {
+            queue_out_buf.uid = uid;
+            queue_out_buf.packet_type = (adsb_packet_type_t)type_code;
+            if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
+                CONSOLE_ERROR("CANBUS", "Packet Queue full");
+            }
+        //}
+        #endif
+// RAD AERO
+
+
     } else {
         CONSOLE_WARNING("AircraftDictionary::IngestModeSADSBPacket",
                         "Failed to apply ADSB message with type code %d to ICAO 0x%lx.", type_code,
@@ -1708,6 +1732,17 @@ bool AircraftDictionary::IngestDecodedUATADSBPacket(const DecodedUATADSBPacket& 
         // Apply UAT state vector to aircraft.
         ingest_ret &= aircraft_ptr->ApplyUATADSBStateVector(packet.state_vector);
 
+// RAD AERO
+        #ifdef ON_ESP32
+        uint32_t uid = aircraft_ptr->GetUID();
+        queue_out_buf.uid = uid;
+        queue_out_buf.packet_type = (adsb_packet_type_t)UAT_STATE_VECTOR;
+        if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
+            CONSOLE_ERROR("CANBUS", "Packet Queue full");
+        }
+        #endif
+// RAD AERO
+
         switch (aircraft_ptr->address_qualifier) {
             case UATAircraft::kTISBTargetWithICAO24BitAddress:
             case UATAircraft::kTISBTargetWithTrackFileIdentifier:
@@ -1722,6 +1757,17 @@ bool AircraftDictionary::IngestDecodedUATADSBPacket(const DecodedUATADSBPacket& 
     if (packet.has_mode_status) {
         // Apply UAT mode status to aircraft.
         ingest_ret &= aircraft_ptr->ApplyUATADSBModeStatus(packet.mode_status);
+
+// RAD AERO
+        #ifdef ON_ESP32
+        uint32_t uid = aircraft_ptr->GetUID();
+        queue_out_buf.uid = uid;
+        queue_out_buf.packet_type = (adsb_packet_type_t)UAT_IDENT;
+        if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
+            CONSOLE_ERROR("CANBUS", "Packet Queue full");
+        }
+        #endif
+// RAD AERO
     }
     if (packet.has_auxiliary_state_vector) {
         // Apply UAT auxiliary state vector to aircraft.

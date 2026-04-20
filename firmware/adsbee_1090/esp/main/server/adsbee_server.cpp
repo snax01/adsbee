@@ -8,6 +8,9 @@
 #include "spi_coprocessor.hh"
 #include "task_priorities.hh"
 #include "unit_conversions.hh"
+// RAD AERO
+#include "comms_canbus.hh"
+// RAD AERO
 
 // #define VERBOSE_DEBUG
 
@@ -92,6 +95,11 @@ bool ADSBeeServer::Init() {
                 xSemaphoreGive(settings_read_semaphore);
             },
     });  // Require ack.
+
+    // RAD AERO
+    // Create Canbus Task
+    xTaskCreate(canbus_task, "CanbusTask", kCanbusTaskStackSizeBytes, NULL, kCanbusTaskPriority, &canbus_task_handle);
+    // RAD AERO
 
     // Wait for the callback to complete
     xSemaphoreTake(settings_read_semaphore, portMAX_DELAY);
@@ -274,34 +282,21 @@ bool ADSBeeServer::ReportGDL90() {
     message.port = kGDL90Port;
 
     // Heartbeat Message
-    message.len = gdl90.WriteGDL90HeartbeatMessage(
-        message.data, CommsManager::NetworkMessage::kMaxLenBytes, get_time_since_boot_ms() / 1000,
+    message.len = gdl90.WriteGDL90HeartbeatMessage(message.data, CommsManager::NetworkMessage::kMaxLenBytes,
+        time_since_zulu,
         aircraft_dictionary.metrics.valid_squitter_frames + aircraft_dictionary.metrics.valid_extended_squitter_frames +
-            aircraft_dictionary.metrics.valid_uat_adsb_frames,  // ADS-B message count includes UAT ADS-B messages.
+            aircraft_dictionary.metrics.valid_uat_adsb_frames,  // ADS-B message count includes UAT ADS-B messages.);
         aircraft_dictionary.metrics.valid_uat_uplink_frames);
     comms_manager.WiFiAccessPointSendMessageToAllStations(message);
 
-    // Ownship Report
-    GDL90Reporter::GDL90TargetReportData ownship_data;
-    SettingsManager::RxPosition& rx_position = object_dictionary.composite_device_status.rp2040.rx_position;
-    uint32_t ownship_icao_address = 0x0;
-    if (rx_position.source == SettingsManager::RxPosition::PositionSource::kPositionSourceAircraftMatchingICAO) {
-        // Only send ownship data with a position if we are tracking an aircraft.
-        ownship_data.latitude_deg = rx_position.latitude_deg;
-        ownship_data.longitude_deg = rx_position.longitude_deg;
-        ownship_data.altitude_ft = rx_position.baro_altitude_ft;
-        ownship_data.speed_kts = rx_position.speed_kts;
-        ownship_data.direction_deg = rx_position.heading_deg;
-        ownship_data.participant_address = rx_position.icao_address;
 
-        ownship_icao_address = ownship_data.participant_address;  // Use this to ignore ownship traffic reports.
-    }
-
-    // TODO: Fill out additional ownship data as needed.
+    // Ownship Report    
     message.len = gdl90.WriteGDL90TargetReportMessage(message.data, CommsManager::NetworkMessage::kMaxLenBytes,
                                                       ownship_data, true);
-    comms_manager.WiFiAccessPointSendMessageToAllStations(message);
-
+    if (comms_manager.WiFiAccessPointSendMessageToAllStations(message)) {
+        message.len = 0;    // If message.len is not cleared then the message will be sent again on line 345
+    }
+    
     // Traffic Reports
     int16_t aircraft_index = -1;  // Just used for error reporting.
     uint8_t aircraft_msg_buf[CommsManager::NetworkMessage::kMaxLenBytes];
@@ -311,22 +306,18 @@ bool ADSBeeServer::ReportGDL90() {
 
         if (ModeSAircraft* mode_s_aircraft = get_if<ModeSAircraft>(&(itr.second)); mode_s_aircraft) {
             if (!mode_s_aircraft->HasBitFlag(ModeSAircraft::kBitFlagPositionValid) ||
-                mode_s_aircraft->icao_address == ownship_icao_address) {
+                mode_s_aircraft->icao_address == ownship_data.participant_address) {
                 // Don't report aircraft without a valid position, and ignore ownship position.
                 continue;
             }
-            printf("\t#A %s (0x%06lX): %.5f %.5f %ld\r\n", mode_s_aircraft->callsign, mode_s_aircraft->icao_address,
-                   mode_s_aircraft->latitude_deg, mode_s_aircraft->longitude_deg, mode_s_aircraft->baro_altitude_ft);
             aircraft_msg_buf_len = gdl90.WriteGDL90TargetReportMessage(aircraft_msg_buf, sizeof(aircraft_msg_buf),
                                                                        *mode_s_aircraft, false);
         } else if (UATAircraft* uat_aircraft = get_if<UATAircraft>(&(itr.second)); uat_aircraft) {
             if (!uat_aircraft->HasBitFlag(UATAircraft::kBitFlagPositionValid) ||
-                uat_aircraft->icao_address == ownship_icao_address) {
+                uat_aircraft->icao_address == ownship_data.participant_address) {
                 // Don't report aircraft without a valid position, and ignore ownship position.
                 continue;
             }
-            printf("\t#U %s (0x%06lX): %.5f %.5f %ld\r\n", uat_aircraft->callsign, uat_aircraft->icao_address,
-                   uat_aircraft->latitude_deg, uat_aircraft->longitude_deg, uat_aircraft->baro_altitude_ft);
             aircraft_msg_buf_len =
                 gdl90.WriteGDL90TargetReportMessage(aircraft_msg_buf, sizeof(aircraft_msg_buf), *uat_aircraft, false);
         } else {
