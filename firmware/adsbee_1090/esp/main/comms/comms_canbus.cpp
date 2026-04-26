@@ -15,22 +15,6 @@
 extern GDL90Reporter gdl90;
 // ADSBEE INCLUDES
 
-// Buffer for received message data
-uint8_t rx_data[64];
-MCP251XFD_CANMessage rx_message = {
-    .PayloadData = rx_data,
-};
-
-// Buffer for transmit message data
-uint8_t tx_data[64] = {0};
-MCP251XFD_CANMessage tx_message = {
-    .MessageID = 0x123,
-    .MessageSEQ = 0,
-    .ControlFlags = (setMCP251XFD_MessageCtrlFlags)(MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE),  // CAN-FD frame with BRS enabled
-    .DLC = MCP251XFD_DLC_2BYTE,
-    .PayloadData = tx_data,
-};
-
 
 #define SPI_HOST_ID         SPI2_HOST  // Using SPI2 (HSPI) - SPI0/SPI1 are typically used for flash/PSRAM
 

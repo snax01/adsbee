@@ -1693,15 +1693,15 @@ bool AircraftDictionary::IngestModeSADSBPacket(const ModeSADSBPacket& packet) {
 
 
 // RAD AERO
-        #ifdef ON_ESP32
-        //if (efis_connected) {
-            queue_out_buf.uid = uid;
-            queue_out_buf.packet_type = (adsb_packet_type_t)type_code;
-            if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
-                CONSOLE_ERROR("CANBUS", "Packet Queue full");
-            }
-        //}
-        #endif
+#ifdef ON_ESP32
+    if (efis_connected) {
+        queue_out_buf.uid = uid;
+        queue_out_buf.packet_type = (adsb_packet_type_t)type_code;
+        if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
+            CONSOLE_ERROR("CANBUS", "Packet Queue full");
+        }
+    }
+#endif
 // RAD AERO
 
 
@@ -1740,14 +1740,16 @@ bool AircraftDictionary::IngestDecodedUATADSBPacket(const DecodedUATADSBPacket& 
         ingest_ret &= aircraft_ptr->ApplyUATADSBStateVector(packet.state_vector);
 
 // RAD AERO
-        #ifdef ON_ESP32
+#ifdef ON_ESP32
+    if (efis_connected) {
         uint32_t uid = aircraft_ptr->GetUID();
         queue_out_buf.uid = uid;
         queue_out_buf.packet_type = (adsb_packet_type_t)UAT_STATE_VECTOR;
         if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
             CONSOLE_ERROR("CANBUS", "Packet Queue full");
         }
-        #endif
+    }
+#endif
 // RAD AERO
 
         switch (aircraft_ptr->address_qualifier) {
@@ -1766,14 +1768,16 @@ bool AircraftDictionary::IngestDecodedUATADSBPacket(const DecodedUATADSBPacket& 
         ingest_ret &= aircraft_ptr->ApplyUATADSBModeStatus(packet.mode_status);
 
 // RAD AERO
-        #ifdef ON_ESP32
+#ifdef ON_ESP32
+    if (efis_connected) {
         uint32_t uid = aircraft_ptr->GetUID();
         queue_out_buf.uid = uid;
         queue_out_buf.packet_type = (adsb_packet_type_t)UAT_IDENT;
         if (xQueueSend(CAN_msg_tx_queue, &queue_out_buf, 0) != pdPASS) {
             CONSOLE_ERROR("CANBUS", "Packet Queue full");
         }
-        #endif
+    }
+#endif
 // RAD AERO
     }
     if (packet.has_auxiliary_state_vector) {
