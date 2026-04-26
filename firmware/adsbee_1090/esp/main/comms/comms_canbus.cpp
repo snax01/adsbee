@@ -54,11 +54,6 @@ static spi_device_handle_t  can_spi_handle = NULL;
 #define CANMSG_ADSB_OWNSHIP_IDENT   0x140
 #define CANMSG_ADSB_WAKEUP          0x150
 
-#define CANMSG_ADSB_AIRCRAFT_OUT    0x120
-#define CANMSG_ADSB_OWNSHIP_STATE   0x130
-#define CANMSG_ADSB_OWNSHIP_IDENT   0x140
-#define CANMSG_ADSB_WAKEUP          0x150
-
 #define CANMSG_HEARTBEAT            0x750
 #define CANMSG_UID_REQUEST          0x760
 #define CANMSG_UID_ASSIGN           0x770
@@ -88,9 +83,6 @@ uint32_t time_since_zulu;
 
 extern QueueHandle_t CAN_msg_tx_queue;
 TaskHandle_t canbus_task_handle = NULL;
-
-static uint32_t last_heartbeat = 0;
-uint32_t serial_num = 0xFF123456;
 
 
 // MCP251XFD Device Configuration
