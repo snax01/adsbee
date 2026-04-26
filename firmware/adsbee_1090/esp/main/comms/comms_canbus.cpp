@@ -11,6 +11,7 @@
 #include "adsbee_server.hh"         // This gives us access to adsbee_server.aircraft_dictionary...
 #include "aircraft_dictionary.hh"
 #include "task_priorities.hh"
+#include "object_dictionary.hh"
 extern GDL90Reporter gdl90;
 // ADSBEE INCLUDES
 
@@ -48,11 +49,14 @@ static spi_device_handle_t  can_spi_handle = NULL;
 
 #define SPI_CLOCK           8000000    // 8 MHz (slowed down for 20MHz crystal)
 
-#define CANMSG_ADSB_AIRCRAFT_OUT  0x120
-#define CANMSG_ADSB_OWNSHIP_STATE  0x130
-#define CANMSG_ADSB_OWNSHIP_IDENT  0x140
-#define CANMSG_ADSB_WAKEUP  0x150
+#define CANMSG_ADSB_AIRCRAFT_OUT    0x120
+#define CANMSG_ADSB_OWNSHIP_STATE   0x130
+#define CANMSG_ADSB_OWNSHIP_IDENT   0x140
+#define CANMSG_ADSB_WAKEUP          0x150
 
+#define CANMSG_HEARTBEAT            0x750
+#define CANMSG_UID_REQUEST          0x760
+#define CANMSG_UID_ASSIGN           0x770
 
 
 extern QueueHandle_t CAN_msg_tx_queue;
@@ -105,6 +109,7 @@ static spi_device_interface_config_t devcfg = {
 
 
 bool volatile efis_connected = false;
+uint8_t RADbus_UID = 0xFF;
 
 uint32_t time_since_zulu;
 
@@ -149,6 +154,7 @@ void process_rx_msg()   {
             gdl90.gnss_position_valid = true;
         }
         CONSOLE_INFO("RADbus", "STATE ownship received.");
+        return;
     }
 
     // TODO - need to set gnss_position_valid and utc_timing_is_valid if RADbus data is valid.
@@ -161,7 +167,14 @@ void process_rx_msg()   {
         memcpy(&ownship_data.navigation_accuracy_category_position, &rx_data[15], 1);
         memcpy(&ownship_data.misc_indicators, &rx_data[16], 1);
         CONSOLE_INFO("RADbus", "IDENT ownship received.");
+        return;
+    }
+
+    if (rx_message.MessageID == CANMSG_UID_ASSIGN)  {
+        RADbus_UID = rx_data[0];
         efis_connected = true;
+        CONSOLE_WARNING("RADbus", "UID assign received.");
+        return;
     }
 
     // TODO - We need a whos connected message to signal what devices are on RADbus, if efis found then set efis_connected = true
@@ -175,13 +188,25 @@ void canbus_task(void* pvParameters)    {
 
     queue_msg_t queue_rx_buf = { 0 };
 
-    static uint32_t last_heartbeat = get_time_since_boot_ms();
+    static uint32_t last_heartbeat = 0;
+    uint32_t serial_num = 0xFF123456;
+    uint8_t UID_request[8];
+    memcpy(&UID_request[0], &serial_num, sizeof(uint32_t));
+    memcpy(&UID_request[4], &ObjectDictionary::kFirmwareVersion, sizeof(uint32_t));
+    
     while(!efis_connected)  {
         
         vTaskDelay(pdMS_TO_TICKS(100));
 
         if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
-            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+            transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
+            last_heartbeat = get_time_since_boot_ms();
+        }
+
+        if (gpio_get_level(CAN_RX_INT_PIN) == 0)    {
+            while (check_rx_fifo())    {
+                process_rx_msg();
+            }
         }
     }
 

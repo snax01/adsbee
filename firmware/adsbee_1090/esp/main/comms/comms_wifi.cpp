@@ -187,9 +187,9 @@ bool CommsManager::WiFiInit() {
         // Access Point Configuration
         wifi_config_t wifi_config_ap = {0};
 
-        strncpy((char*)(wifi_config_ap.ap.ssid), wifi_ap_ssid, SettingsManager::Settings::kWiFiSSIDMaxLen + 1);
+        strncpy((char*)(wifi_config_ap.ap.ssid), wifi_ap_ssid, SettingsManager::Settings::kWiFiSSIDMaxLen);
         strncpy((char*)(wifi_config_ap.ap.password), wifi_ap_password,
-                SettingsManager::Settings::kWiFiPasswordMaxLen + 1);
+                SettingsManager::Settings::kWiFiPasswordMaxLen);
         wifi_config_ap.ap.channel = wifi_ap_channel;
         wifi_config_ap.ap.ssid_len = (uint8_t)strnlen(wifi_ap_ssid, SettingsManager::Settings::kWiFiSSIDMaxLen);
         if (strnlen(wifi_ap_password, SettingsManager::Settings::kWiFiPasswordMaxLen) == 0) {
@@ -206,9 +206,9 @@ bool CommsManager::WiFiInit() {
         // Station Configuration
         wifi_config_t wifi_config_sta = {0};
 
-        strncpy((char*)(wifi_config_sta.sta.ssid), wifi_sta_ssid, SettingsManager::Settings::kWiFiSSIDMaxLen + 1);
+        strncpy((char*)(wifi_config_sta.sta.ssid), wifi_sta_ssid, SettingsManager::Settings::kWiFiSSIDMaxLen);
         strncpy((char*)(wifi_config_sta.sta.password), wifi_sta_password,
-                SettingsManager::Settings::kWiFiPasswordMaxLen + 1);
+                SettingsManager::Settings::kWiFiPasswordMaxLen);
 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config_sta));
     }
