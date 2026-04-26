@@ -48,6 +48,11 @@ static spi_device_handle_t  can_spi_handle = NULL;
 
 #define SPI_CLOCK           8000000    // 8 MHz (slowed down for 20MHz crystal)
 
+#define CANMSG_ADSB_AIRCRAFT_OUT  0x120
+#define CANMSG_ADSB_OWNSHIP_STATE  0x130
+#define CANMSG_ADSB_OWNSHIP_IDENT  0x140
+#define CANMSG_ADSB_WAKEUP  0x150
+
 
 
 extern QueueHandle_t CAN_msg_tx_queue;
@@ -99,7 +104,7 @@ static spi_device_interface_config_t devcfg = {
 };
 
 
-bool volatile efis_connected = true;
+bool volatile efis_connected = false;
 
 uint32_t time_since_zulu;
 
@@ -131,7 +136,7 @@ void process_rx_msg()   {
         MCP251XFD_FIFO1);
 
 
-    if (rx_message.MessageID == 0x1AD)  {
+    if (rx_message.MessageID == CANMSG_ADSB_OWNSHIP_STATE)  {
         memcpy(&time_since_zulu, &rx_data[0], sizeof(uint32_t));
         memcpy(&ownship_data.latitude_deg, &rx_data[4], sizeof(float));
         memcpy(&ownship_data.longitude_deg, &rx_data[8], sizeof(float));
@@ -147,7 +152,7 @@ void process_rx_msg()   {
     }
 
     // TODO - need to set gnss_position_valid and utc_timing_is_valid if RADbus data is valid.
-    if (rx_message.MessageID == 0x1AE)  {
+    if (rx_message.MessageID == CANMSG_ADSB_OWNSHIP_IDENT)  {
         memcpy(&ownship_data.callsign, &rx_data[0], 8);
         memcpy(&ownship_data.participant_address, &rx_data[8], 4);
         memcpy(&ownship_data.address_type, &rx_data[12], 1);
@@ -169,6 +174,16 @@ void canbus_task(void* pvParameters)    {
     uint32_t uid_of_msg;
 
     queue_msg_t queue_rx_buf = { 0 };
+
+    static uint32_t last_heartbeat = get_time_since_boot_ms();
+    while(!efis_connected)  {
+        
+        vTaskDelay(pdMS_TO_TICKS(100));
+
+        if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
+            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+        }
+    }
 
     while (1)   {
 
@@ -209,7 +224,7 @@ void canbus_task(void* pvParameters)    {
                     memcpy(&tx_buf[5], &aircraft_mode_s.callsign, 8);
                     memcpy(&tx_buf[13], &aircraft_mode_s.emitter_category, 1);
 
-                    transmit_can(0x1AC, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
                     break;
                 }
 
@@ -241,7 +256,7 @@ void canbus_task(void* pvParameters)    {
                     memcpy(&tx_buf[13], &aircraft_mode_s.baro_altitude_ft, 4);
 
                     // TODO - Transmit GNSS Altitude if TC == 20 - 22
-                    transmit_can(0x1AC, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
+                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
                     break;
                 }
 
@@ -252,7 +267,7 @@ void canbus_task(void* pvParameters)    {
                     memcpy(&tx_buf[5], &aircraft_mode_s.direction_deg, 4);
                     memcpy(&tx_buf[9], &aircraft_mode_s.baro_vertical_rate_fpm, 4);
                     memcpy(&tx_buf[13], &aircraft_mode_s.speed_kts, 4);
-                    transmit_can(0x1AC, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
+                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
                     break;
                 }
 
@@ -285,7 +300,7 @@ void canbus_task(void* pvParameters)    {
                     memcpy(&tx_buf[5], &aircraft_uat.callsign, 8);
                     memcpy(&tx_buf[13], &aircraft_uat.emitter_category, 1);
 
-                    transmit_can(0x1AC, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
                     break;
                 }
 
@@ -301,7 +316,7 @@ void canbus_task(void* pvParameters)    {
                     memcpy(&tx_buf[25], &aircraft_uat.speed_kts, 4);
 
                     // TODO - Transmit GNSS Altitude if valid
-                    transmit_can(0x1AC, MCP251XFD_DLC_32BYTE, &tx_buf[0]);
+                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_32BYTE, &tx_buf[0]);
                     break;
                 }
                 

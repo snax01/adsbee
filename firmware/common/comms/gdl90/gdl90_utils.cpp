@@ -123,6 +123,12 @@ uint16_t GDL90Reporter::WriteGDL90UplinkDataMessage(uint8_t* to_buf, uint16_t to
         return 0;
     }
 
+    // We can't use the standard WriteGDL90Message function here because the uplink payload may be too long to create a
+    // separate buffer for. Instead, we will manually send the flag byte and then write escaped bit fields using the
+    // WriteBufferWithGDL90Escapes function.
+    uint16_t bytes_written = 0;
+    to_buf[bytes_written++] = kGDL90FlagByte;  // Beginning flag byte.
+
     const uint16_t kHeaderBufLenBytes = sizeof(GDL90MessageID) + 3;
     uint8_t header_buf[kHeaderBufLenBytes];
     header_buf[0] = kGDL90MessageIDUplinkData;
@@ -269,7 +275,7 @@ uint16_t GDL90Reporter::WriteGDL90TargetReportMessage(uint8_t* to_buf, uint16_t 
                                  ? aircraft.baro_vertical_rate_fpm
                                  : aircraft.gnss_vertical_rate_fpm;
     data.direction_deg = aircraft.direction_deg;
-    data.emitter_category = (uint8_t)aircraft.emitter_category;
+    data.emitter_category = aircraft.emitter_category;
 
     // GDL90 does not provide space for an EOS character, since it only provides 8 Bytes for the callsign.
     memcpy(data.callsign, aircraft.callsign, ModeSAircraft::kCallSignMaxNumChars);
@@ -324,7 +330,7 @@ uint16_t GDL90Reporter::WriteGDL90TargetReportMessage(uint8_t* to_buf, uint16_t 
                                  ? aircraft.baro_vertical_rate_fpm
                                  : aircraft.gnss_vertical_rate_fpm;
     data.direction_deg = aircraft.direction_deg;
-    data.emitter_category = aircraft.emitter_category_raw;
+    data.emitter_category = aircraft.emitter_category;
     // GDL90 does not provide space for an EOS character, since it only provides 8 Bytes for the callsign.
     memcpy(data.callsign, aircraft.callsign, UATAircraft::kCallSignMaxNumChars);
     // NOTE: Emergency Priority code currently not used.
