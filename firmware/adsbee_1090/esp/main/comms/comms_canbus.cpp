@@ -15,23 +15,6 @@
 extern GDL90Reporter gdl90;
 // ADSBEE INCLUDES
 
-// Buffer for received message data
-uint8_t rx_data[64];
-MCP251XFD_CANMessage rx_message = {
-    .PayloadData = rx_data,
-};
-
-// Buffer for transmit message data
-uint8_t tx_data[64] = {0};
-MCP251XFD_CANMessage tx_message = {
-    .MessageID = 0x123,
-    .MessageSEQ = 0,
-    .ControlFlags = (setMCP251XFD_MessageCtrlFlags)(MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE),  // CAN-FD frame with BRS enabled
-    .DLC = MCP251XFD_DLC_2BYTE,
-    .PayloadData = tx_data,
-};
-
-
 #define SPI_HOST_ID         SPI2_HOST  // Using SPI2 (HSPI) - SPI0/SPI1 are typically used for flash/PSRAM
 
 static spi_device_handle_t  can_spi_handle = NULL;
@@ -58,9 +41,32 @@ static spi_device_handle_t  can_spi_handle = NULL;
 #define CANMSG_UID_REQUEST          0x760
 #define CANMSG_UID_ASSIGN           0x770
 
+// Buffer for received message data
+uint8_t rx_data[64];
+MCP251XFD_CANMessage rx_message = {
+    .PayloadData = rx_data,
+};
+
+// Buffer for transmit message data
+uint8_t tx_data[64] = {0};
+MCP251XFD_CANMessage tx_message = {
+    .MessageID = 0x123,
+    .MessageSEQ = 0,
+    .ControlFlags = (setMCP251XFD_MessageCtrlFlags)(MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE),  // CAN-FD frame with BRS enabled
+    .DLC = MCP251XFD_DLC_2BYTE,
+    .PayloadData = tx_data,
+};
+
+bool volatile efis_connected = false;
+uint8_t RADbus_UID = 0xFF;
+
+uint32_t time_since_zulu;
 
 extern QueueHandle_t CAN_msg_tx_queue;
 TaskHandle_t canbus_task_handle = NULL;
+
+static uint32_t last_heartbeat = 0;
+uint32_t serial_num = 0xFF123456;
 
 
 // MCP251XFD Device Configuration
@@ -107,11 +113,6 @@ static spi_device_interface_config_t devcfg = {
     .post_cb = NULL
 };
 
-
-bool volatile efis_connected = false;
-uint8_t RADbus_UID = 0xFF;
-
-uint32_t time_since_zulu;
 
 
 GDL90Reporter::GDL90TargetReportData ownship_data = { .traffic_alert_status = 0,
@@ -176,30 +177,20 @@ void process_rx_msg()   {
         CONSOLE_WARNING("RADbus", "UID assign received.");
         return;
     }
-
-    // TODO - We need a whos connected message to signal what devices are on RADbus, if efis found then set efis_connected = true
 }
 
 
 void canbus_task(void* pvParameters)    {
     CanbusInit(CAN_TERM_ON);
 
-    uint32_t uid_of_msg;
-
     queue_msg_t queue_rx_buf = { 0 };
 
-    static uint32_t last_heartbeat = 0;
-    uint32_t serial_num = 0xFF123456;
-    uint8_t UID_request[8];
-    memcpy(&UID_request[0], &serial_num, sizeof(uint32_t));
-    memcpy(&UID_request[4], &ObjectDictionary::kFirmwareVersion, sizeof(uint32_t));
-    
-    while(!efis_connected)  {
-        
-        vTaskDelay(pdMS_TO_TICKS(100));
+    while (1)   {
+
+        vTaskDelay(pdMS_TO_TICKS(10));
 
         if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
-            transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
+            transmit_can(CANMSG_HEARTBEAT, MCP251XFD_DLC_1BYTE, &RADbus_UID);
             last_heartbeat = get_time_since_boot_ms();
         }
 
@@ -208,21 +199,6 @@ void canbus_task(void* pvParameters)    {
                 process_rx_msg();
             }
         }
-    }
-
-    while (1)   {
-
-        vTaskDelay(pdMS_TO_TICKS(10));
-
-        if (gpio_get_level(CAN_RX_INT_PIN) == 0)    {
-            while (check_rx_fifo())    {
-                process_rx_msg();
-            }
-        }
-
-
-        // TODO - check canbus error status at 1hz
-        //check_can_errors();
 
         if (efis_connected) {
             if (xQueueReceive(CAN_msg_tx_queue, &queue_rx_buf, 0) == pdPASS) {
@@ -244,10 +220,10 @@ void canbus_task(void* pvParameters)    {
                 case MODE_S_IDENT + 2:  // TC = 3 (Aircraft Identification)
                 case MODE_S_IDENT + 3: {// TC = 4 (Aircraft Identification)
                     uint8_t tx_buf[16] = { 0 };
-                    memcpy(&tx_buf[0], &queue_rx_buf.packet_type, 1);
+                    tx_buf[0] = queue_rx_buf.packet_type;
                     memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
                     memcpy(&tx_buf[5], &aircraft_mode_s.callsign, 8);
-                    memcpy(&tx_buf[13], &aircraft_mode_s.emitter_category, 1);
+                    tx_buf[13] = aircraft_mode_s.emitter_category;
 
                     transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
                     break;
@@ -274,7 +250,7 @@ void canbus_task(void* pvParameters)    {
                 case MODE_S_POSITION_GNSS + 1:  // TC = 21 (Airborne Position w/ GNSS Altitude)
                 case MODE_S_POSITION_GNSS + 2: { // TC = 22 (Airborne Position w/ GNSS Altitude)
                     uint8_t tx_buf[20] = { 0 };
-                    memcpy(&tx_buf[0], &queue_rx_buf.packet_type, 1);
+                    tx_buf[0] = queue_rx_buf.packet_type;
                     memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
                     memcpy(&tx_buf[5], &aircraft_mode_s.latitude_deg, 4);
                     memcpy(&tx_buf[9], &aircraft_mode_s.longitude_deg, 4);
@@ -287,7 +263,7 @@ void canbus_task(void* pvParameters)    {
 
                 case MODE_S_VELOCITY: {  // TC = 19 (Airborne Velocities)
                     uint8_t tx_buf[20] = { 0 };
-                    memcpy(&tx_buf[0], &queue_rx_buf.packet_type, 1);
+                    tx_buf[0] = queue_rx_buf.packet_type;
                     memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
                     memcpy(&tx_buf[5], &aircraft_mode_s.direction_deg, 4);
                     memcpy(&tx_buf[9], &aircraft_mode_s.baro_vertical_rate_fpm, 4);
@@ -320,10 +296,10 @@ void canbus_task(void* pvParameters)    {
 
                 case UAT_IDENT: {
                     uint8_t tx_buf[16] = { 0 };
-                    memcpy(&tx_buf[0], &queue_rx_buf.packet_type, 1);
+                    tx_buf[0] = queue_rx_buf.packet_type;
                     memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
                     memcpy(&tx_buf[5], &aircraft_uat.callsign, 8);
-                    memcpy(&tx_buf[13], &aircraft_uat.emitter_category, 1);
+                    tx_buf[13] = aircraft_uat.emitter_category;
 
                     transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
                     break;
@@ -331,7 +307,7 @@ void canbus_task(void* pvParameters)    {
 
                 case UAT_STATE_VECTOR:  {
                     uint8_t tx_buf[30] = { 0 };
-                    memcpy(&tx_buf[0], &queue_rx_buf.packet_type, 1);
+                    tx_buf[0] = queue_rx_buf.packet_type;
                     memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
                     memcpy(&tx_buf[5], &aircraft_uat.latitude_deg, 4);
                     memcpy(&tx_buf[9], &aircraft_uat.longitude_deg, 4);
@@ -361,12 +337,27 @@ void canbus_task(void* pvParameters)    {
                 }
             }
         }
-    }
+
+        // TODO - check canbus error status at 1hz
+        //check_can_errors();
+
+    }   // End of can loop
 }
 
 
 bool CanbusInit(can_termination_t term_res_enable)   {
     CONSOLE_INFO("CAN_INIT", "Initializing MCP251863...");
+
+    // Configure selectable termination resistor GPIO control
+    gpio_config_t term_res_gpio = {
+        .pin_bit_mask = (1ULL << CAN_TERM_ENABLE),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&term_res_gpio);
+    gpio_set_level(CAN_TERM_ENABLE, term_res_enable);
     
     // Configure and drive standby pin to wake device
     gpio_config_t standby_gpio = {
@@ -379,17 +370,6 @@ bool CanbusInit(can_termination_t term_res_enable)   {
     gpio_config(&standby_gpio);
     // Drive standby pin LOW to activate device (XSTBY is active low)
     gpio_set_level(CAN_STANDBY_PIN, 0);
-
-    // Configure selectable termination resistor GPIO control
-    gpio_config_t term_res_gpio = {
-        .pin_bit_mask = (1ULL << CAN_TERM_ENABLE),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&term_res_gpio);
-    gpio_set_level(CAN_TERM_ENABLE, term_res_enable);
 
     // Configure CAN RX Interrupt pin
     gpio_config_t can_rx_int = {
@@ -414,13 +394,13 @@ bool CanbusInit(can_termination_t term_res_enable)   {
     CAN_msg_tx_queue = xQueueCreate(100, sizeof(queue_msg_t));
     
 
-    vTaskDelay(pdMS_TO_TICKS(10));
+    vTaskDelay(pdMS_TO_TICKS(5));
     
     // Initialize MCP251XFD device with CAN-FD configuration
     // Note: SPI bus initialization is handled by MCP251XFD_SPI_Init callback
     MCP251XFD_Config mcp_config = {
         // Controller clocks
-        .XtalFreq = 20000000,  // 40MHz crystal
+        .XtalFreq = 20000000,  // 40MHz crystal // TODO - Change to 40MHz crystal and update this in v2
         .OscFreq = 0,          // Not using external oscillator
         .SysclkConfig = MCP251XFD_SYSCLK_IS_CLKIN,  // SYSCLK = CLKIN (no PLL) = 40MHz
         .ClkoPinConfig = MCP251XFD_CLKO_DivBy10,
@@ -513,8 +493,25 @@ bool CanbusInit(can_termination_t term_res_enable)   {
 
     //gpio_isr_handler_add(CAN_RX_INT_PIN, CANRX_isr_handler, NULL);
 
-    // TODO - let this be a "whoamI" message
-    //transmit_can(0x523, MCP251XFD_DLC_8BYTE, tx_data);
+    while(!efis_connected)  {
+
+        uint8_t UID_request[8];
+        memcpy(&UID_request[0], &serial_num, sizeof(uint32_t));
+        memcpy(&UID_request[4], &ObjectDictionary::kFirmwareVersion, sizeof(uint32_t));
+        
+        vTaskDelay(pdMS_TO_TICKS(100));
+
+        if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
+            transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
+            last_heartbeat = get_time_since_boot_ms();
+        }
+
+        if (gpio_get_level(CAN_RX_INT_PIN) == 0)    {
+            while (check_rx_fifo())    {
+                process_rx_msg();
+            }
+        }
+    }
     
     return true;
 }
