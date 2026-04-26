@@ -32,6 +32,11 @@ static spi_device_handle_t  can_spi_handle = NULL;
 
 #define SPI_CLOCK           8000000    // 8 MHz (slowed down for 20MHz crystal)
 
+#define CANMSG_ADSB_AIRCRAFT_OUT  0x120
+#define CANMSG_ADSB_OWNSHIP_STATE  0x130
+#define CANMSG_ADSB_OWNSHIP_IDENT  0x140
+#define CANMSG_ADSB_WAKEUP  0x150
+
 #define CANMSG_ADSB_AIRCRAFT_OUT    0x120
 #define CANMSG_ADSB_OWNSHIP_STATE   0x130
 #define CANMSG_ADSB_OWNSHIP_IDENT   0x140
@@ -59,14 +64,13 @@ MCP251XFD_CANMessage tx_message = {
 
 bool volatile efis_connected = false;
 uint8_t RADbus_UID = 0xFF;
+uint32_t last_heartbeat = 0;
+uint32_t serial_num = 0xFF123456;
 
 uint32_t time_since_zulu;
 
 extern QueueHandle_t CAN_msg_tx_queue;
 TaskHandle_t canbus_task_handle = NULL;
-
-static uint32_t last_heartbeat = 0;
-uint32_t serial_num = 0xFF123456;
 
 
 // MCP251XFD Device Configuration
