@@ -3,54 +3,53 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>RAD Aero-bee RC17</title>
+    <title>ADSBee Web Terminal</title>
     <link rel="stylesheet" href="style.css">
     <link rel="icon" type="image/png" href="favicon.png">
 </head>
 
 <body>
-    <div class="page">
-        <div id="status" class="connection-status disconnected">Disconnected</div>
-
-        <div class="wifi-settings column-element">
-            <h2 class="wifi-settings-heading">WIFI Access Point</h2>
-            <p class="wifi-settings-intro">Connect your panel mounted devices, phone, tablet or portable GPS to this network to receive ADSB traffic.</p>
-            <div class="wifi-field-row">
-                <label for="wifiSsid">SSID:</label>
-                <input type="text" id="wifiSsid" name="wifiSsid" autocomplete="off" spellcheck="false">
+    <div class="column-container">
+        <div id="terminal" class="column-element" onclick="focusTerminal()">
+            <div id="terminal-content"></div>
+            <div class="input-line">
+                <span class="prompt">&gt;</span>
+                <span id="current-line"><span id="cursor"> </span></span>
+                <!-- <span id="cursor"></span> -->
             </div>
-            <div class="wifi-field-row">
-                <label for="wifiPassword">Password:</label>
-                <div class="password-input-wrap">
-                    <input type="password" id="wifiPassword" name="wifiPassword" autocomplete="off">
-                    <button id="togglePasswordButton" class="password-toggle" type="button" aria-label="Show password" title="Show password">👁</button>
+            <input type="text" class="hidden-input" id="hidden-input" autocomplete="off">
+        </div>
+
+        <div id="status" class="connection-status disconnected">Disconnected</div>
+        <div id="metrics-container" class="column-element metrics">
+            <div id="receiver-metrics-container">
+                <div class="metrics-header">Receiver Metrics</div>
+                <!-- Cards will be dynamically inserted here -->
+            </div>
+            <div id="feed-metrics-container">
+                <div id="feed-count" class="metrics-header">Feeds: 0</div>
+                <!-- Cards will be dynamically inserted here -->
+            </div>
+            <div id="device-status-container" class="device-status">
+                <div class="metrics-header">Device Status</div>
+                <div id="device-status-cards-container" class="device-status-cards">
+                    <!-- Device status cards will be dynamically inserted here -->
                 </div>
             </div>
-            <div class="wifi-save-row">
-                <button id="saveSettingsButton" class="tools-button" type="button">
-                    Save Settings
-                </button>
-            </div>
-            <p id="wifiValidationError" class="wifi-validation-error" role="alert" hidden></p>
         </div>
 
         <div class="tools-container column-element">
             <div class="button-row">
-                <button id="uploadButton" class="tools-button" type="button">
-                    Update Firmware
+                <button id="uploadButton" class="tools-button">
+                    Upload Firmware
                 </button>
                 <input type="file" id="fileInput" accept=".ota" style="display: none;">
 
-                <div class="settings-backup-tools">
-                    <button id="downloadSettings" class="tools-button" type="button">
-                        Download Settings
-                    </button>
-                    <button id="restoreSettings" class="tools-button" type="button">
-                        Restore Settings
-                    </button>
-                </div>
-                <button id="enterBootloaderButton" class="tools-button" type="button">
-                    Enter Bootloader
+                <button id="downloadSettings" class="tools-button">
+                    Download Settings
+                </button>
+                <button id="restoreSettings" class="tools-button">
+                    Restore Settings
                 </button>
             </div>
 
@@ -71,25 +70,18 @@
         </div>
     </div>
 
-    <!-- Console DOM kept off-screen so WebSocket + AT path stays intact; wire UI here later -->
-    <div class="console-backend-hidden" aria-hidden="true">
-        <div id="terminal" onclick="focusTerminal()">
-            <div id="terminal-content"></div>
-            <div class="input-line">
-                <span class="prompt">&gt;</span>
-                <span id="current-line"><span id="cursor"> </span></span>
-            </div>
-            <input type="text" class="hidden-input" id="hidden-input" autocomplete="off">
-        </div>
-    </div>
-
     <script>
         const HOST_URI = `${window.location.hostname}`;
+        // const HOST_URI = "testbee.local";
         const WS_CONFIG = {
             console_ws_url: `ws://${HOST_URI}/console`,
             metrics_ws_url: `ws://${HOST_URI}/metrics`,
             reconnectDelayMs: 5000
         };
+
+        /**
+         * Network console terminal. 
+         */
 
         const terminal = document.getElementById('terminal');
         const terminalContent = document.getElementById('terminal-content');
@@ -97,6 +89,7 @@
         const hiddenInput = document.getElementById('hidden-input');
         const cursor = document.getElementById('cursor');
 
+        let socket = null;
         let commandHistory = [];
         let historyIndex = -1;
         let currentCommand = '';
@@ -109,36 +102,46 @@
             }
 
             init() {
-                this.ws = new WebSocket(this.url);
+                this.ws = new WebSocket(this.url)
                 this.attachEventHandlers();
             }
 
             attachEventHandlers() {
+                // Connection opened
                 this.ws.addEventListener('open', () => {
                     console.log(`Connected to ${this.url}`);
+
+                    // Send the message once connected
+                    // this.send("AT+HELP\r\n");
                 });
 
+                // Listen for messages
                 this.ws.addEventListener('message', (event) => {
                     if (typeof event.data === 'string') {
+                        // console.log('Received message:', event.data);
                         appendToTerminal(event.data);
                     } else if (event.data instanceof Blob) {
                         const reader = new FileReader();
                         reader.onload = () => {
                             const text = reader.result;
+                            // console.log('Received binary message:', text);
                             appendToTerminal(text);
                         };
                         reader.readAsText(event.data);
                     }
                 });
 
+                // Connection closed (both clean and unclean closes)
                 this.ws.addEventListener('close', (event) => {
                     console.log(`Connection closed. Code: ${event.code}, Reason: ${event.reason}`);
                     appendToTerminal(`Connection closed. Code: ${event.code}\n`);
                     this.attemptReconnect();
                 });
 
+                // Connection error
                 this.ws.addEventListener('error', (error) => {
                     console.error('WebSocket error:', error);
+                    // Don't call attemptReconnect here as the close event will be fired after error
                 });
             }
 
@@ -147,14 +150,16 @@
                     this.ws.send(message);
                     console.log(`Sent message: ${message}`);
                     return true;
+                } else {
+                    console.warn('Cannot send message - connection is not open');
+                    return false;
                 }
-                console.warn('Cannot send message - connection is not open');
-                return false;
             }
 
             attemptReconnect() {
                 setTimeout(() => {
-                    this.init();
+                    // Check again if we should reconnect before attempting
+                    this.init()
                 }, WS_CONFIG.reconnectDelayMs);
             }
 
@@ -174,6 +179,7 @@
                 return states[this.ws ? this.ws.readyState : 3];
             }
 
+            // Method to manually trigger reconnection
             reconnect() {
                 if (this.ws) {
                     this.ws.close();
@@ -181,30 +187,39 @@
                     this.attemptReconnect();
                 }
             }
+
         }
 
         function appendToTerminal(text) {
+            // Escape HTML entities to prevent angle brackets from being interpreted as tags
             function escapeHtml(str) {
                 return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             }
 
+            // Process ANSI escape sequences for colors
             const ansiRegex = /\x1b\[([0-9;]*)m/g;
+            let processedText = text;
             let lastIndex = 0;
             let result = '';
 
             let match;
             while ((match = ansiRegex.exec(text)) !== null) {
+                // Add text before the escape sequence (escaped)
                 result += escapeHtml(text.slice(lastIndex, match.index));
 
                 const codes = match[1].split(';').map(code => parseInt(code) || 0);
 
+                // Handle color codes
                 for (const code of codes) {
                     if (code === 0) {
+                        // Reset - close any open spans
                         result += '</span>';
                     } else if (code >= 30 && code <= 37) {
+                        // Foreground colors
                         const colors = ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white'];
                         result += `<span style="color: ${colors[code - 30]}">`;
                     } else if (code >= 90 && code <= 97) {
+                        // Bright foreground colors
                         const brightColors = ['gray', 'lightcoral', 'lightgreen', 'lightyellow', 'lightblue', 'lightpink', 'lightcyan', 'white'];
                         result += `<span style="color: ${brightColors[code - 90]}">`;
                     }
@@ -213,8 +228,11 @@
                 lastIndex = ansiRegex.lastIndex;
             }
 
+            // Add remaining text (escaped)
             result += escapeHtml(text.slice(lastIndex));
-            terminalContent.innerHTML += result;
+            processedText = result;
+
+            terminalContent.innerHTML += processedText;
             terminal.scrollTop = terminal.scrollHeight;
         }
 
@@ -253,10 +271,12 @@
             const commandLength = currentCommand.length;
 
             if (inputLength > commandLength) {
+                // Character was added
                 const newChar = inputValue[inputLength - 1];
                 currentCommand = currentCommand.substring(0, cursorPosition) + newChar + currentCommand.substring(cursorPosition);
                 cursorPosition++;
             } else if (inputLength < commandLength) {
+                // Character was deleted (backspace)
                 if (cursorPosition > 0) {
                     currentCommand = currentCommand.substring(0, cursorPosition - 1) + currentCommand.substring(cursorPosition);
                     cursorPosition--;
@@ -330,10 +350,12 @@
                     break;
                 case 'Tab':
                     e.preventDefault();
+                    // Could implement command completion here
                     break;
             }
         });
 
+        // Handle copy/paste
         document.addEventListener('copy', (e) => {
             const selection = window.getSelection();
             if (selection.toString().length > 0) {
@@ -351,48 +373,189 @@
             updateDisplay();
         });
 
+        // Keep cursor blinking when window is inactive
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
-                const c = document.getElementById('cursor');
-                if (c) {
-                    c.style.animation = 'none';
-                    c.offsetHeight;
-                    c.style.animation = null;
-                }
+                cursor.style.animation = 'none';
+                cursor.offsetHeight; // Trigger reflow
+                cursor.style.animation = null;
             }
         });
 
-        window.addEventListener('pagehide', () => {
+        window.addEventListener('pagehide', (event) => {
+            // Close WebSocket connection gracefully
             consoleWebSocket.close(1000, 'Tab closing - normal shutdown');
             metricsWebSocket.close(1000, 'Tab closing - normal shutdown');
         });
 
+        // Initialize
         const consoleWebSocket = new ConsoleWebSocket(WS_CONFIG.console_ws_url);
-        window.adsbeeConsoleWebSocket = consoleWebSocket;
         focusTerminal();
 
         /**
-         * Metrics WebSocket: connection indicator only (no charts/cards).
+         * Sparkline feed metrics cards.
          */
-        class MetricsConnection {
+        class SparklineChart {
+            constructor(id, maxPoints = 20) {
+                this.svg = document.getElementById(id);
+                this.maxPoints = maxPoints;
+                this.points = Array(maxPoints).fill(0);
+                this.valueEl = this.svg.parentNode.querySelector('.metric-value');
+                this.createPaths();
+            }
+
+            createPaths() {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                area.classList.add('area');
+                this.svg.appendChild(area);
+                this.svg.appendChild(line);
+                this.linePath = line;
+                this.areaPath = area;
+            }
+
+            update(value) {
+                this.points.push(value);
+                this.points.shift();
+                this.valueEl.textContent = `${value} msg/s`;
+
+                const max = Math.max(...this.points, 1);
+                const points = this.points.map((p, i) => [
+                    (i / (this.maxPoints - 1)) * 100,
+                    30 - (p / max) * 30
+                ]);
+
+                const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0]} ${p[1]}`).join(' ');
+                this.linePath.setAttribute('d', line);
+
+                const area = line + ` L ${points[points.length - 1][0]} 30 L 0 30 Z`;
+                this.areaPath.setAttribute('d', area);
+            }
+        }
+
+        class MetricCard {
+            constructor(container, label) {
+                this.container = container;
+                this.label = label;
+                this.id = `chart-${this.labelToID(label)}`
+
+                const card = document.createElement('div');
+                card.className = 'metrics-card';
+                card.innerHTML = `
+          <div class="metric-title" title="${label}">${label}</div>
+          <div class="metric-value">0 msg/s</div>
+          <svg class="sparkline" id="${this.id}" viewBox="0 0 100 30"></svg>
+        `;
+                this.container.appendChild(card);
+                this.chart = new SparklineChart(this.id);
+
+            }
+
+            destroy() {
+                this.container.removeChild(this.card);
+                delete this.chart;
+            }
+
+            labelToID(label) {
+                return label.replace(/[^a-zA-Z0-9]/g, '-');
+            }
+
+            update(value) {
+                this.chart.update(value);
+            }
+        }
+
+        class MetricsWebSocket {
             constructor(url) {
                 this.url = url;
-                this.statusEl = document.getElementById('status');
+                this.cards = {
+                    'feed': {},
+                    'receiver': {}
+                };
                 this.connect();
+                this.statusEl = document.getElementById('status');
+                this.feedsCountEl = document.getElementById('feed-count');
+                this.container = document.getElementById('metrics-container');
+            }
+
+            updateMetricsCards(parentLabel, data) {
+                // Remove charts that are no longer in the data
+                Object.keys(this.cards[parentLabel]).forEach(label => {
+                    if (!data.hasOwnProperty(label)) {
+                        this.cards[parentLabel][label].destroy();
+                    }
+                });
+
+                // Update existing charts and create new ones
+                Object.entries(data).forEach(([label, value]) => {
+                    if (!this.cards[parentLabel][label]) {
+                        this.cards[parentLabel][label] = new MetricCard(document.getElementById(`${parentLabel}-metrics-container`), label);
+                    }
+                    this.cards[parentLabel][label].update(value);
+                });
+            }
+
+            updateDeviceStatus(deviceStatus) {
+                const container = document.getElementById('device-status-cards-container');
+
+                // Clear existing content
+                container.innerHTML = '';
+
+                // Create cards for each device
+                Object.entries(deviceStatus).forEach(([deviceName, status]) => {
+                    const card = document.createElement('div');
+                    card.className = 'device-status-card';
+
+                    let statusHtml = `<div class="device-card">
+                                        <div class="device-status-title">${deviceName.toUpperCase()}</div>`;
+
+                    // Add status information
+                    Object.entries(status).forEach(([key, value]) => {
+                        let displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                        let displayValue = value;
+
+                        // Format specific values
+                        if (key.includes('uptime_ms')) {
+                            displayKey = 'Uptime';
+                            displayValue = `${Math.floor(value / 1000)}s`;
+                        } else if (key.includes('temperature')) {
+                            displayKey = 'Temperature';
+                            displayValue = `${value}°C`;
+                        } else if (key.includes('usage_percent')) {
+                            displayKey = displayKey.replace(' Percent', '');
+                            displayValue = `${value}%`;
+                        } else if (key.includes('heap_free_bytes')) {
+                            displayKey = 'Free Heap';
+                            displayValue = `${value} B`;
+                        } else if (key.includes('heap_largest_free_block_bytes')) {
+                            displayKey = 'Largest Free Block';
+                            displayValue = `${value} B`;
+                        }
+
+                        statusHtml += `<div class="status-item">
+                                            <span class="status-key">${displayKey}:</span>
+                                            <span class="status-value">${displayValue}</span>
+                                        </div>`;
+                    });
+                    statusHtml += `</div>`;
+
+                    card.innerHTML = statusHtml;
+                    container.appendChild(card);
+                });
             }
 
             connect() {
                 this.ws = new WebSocket(this.url);
 
                 this.ws.onopen = () => {
-                    console.log('Connected to metrics WebSocket');
+                    console.log('Connected to WebSocket');
                     this.statusEl.textContent = `Connected to ADSBee at ${HOST_URI}`;
                     this.statusEl.classList.remove('disconnected');
                     this.statusEl.classList.add('connected');
                 };
 
                 this.ws.onclose = () => {
-                    console.log('Disconnected from metrics WebSocket');
+                    console.log('Disconnected from WebSocket');
                     this.statusEl.textContent = 'Disconnected - Reconnecting...';
                     this.statusEl.classList.remove('connected');
                     this.statusEl.classList.add('disconnected');
@@ -403,8 +566,40 @@
                     console.error('WebSocket error:', error);
                 };
 
-                this.ws.onmessage = () => {
-                    /* Stream consumed; UI charts removed */
+                this.ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+
+                        if (data.hasOwnProperty('aircraft_dictionary_metrics')) {
+                            const dictionaryMetrics = Object.fromEntries(
+                                Object.entries(data['aircraft_dictionary_metrics']).filter(([key, value]) => !Array.isArray(value))
+                            );
+                            // console.log('Dictionary Metrics:', dictionaryMetrics);
+                            this.updateMetricsCards('receiver', dictionaryMetrics);
+                        }
+                        if (data.hasOwnProperty('server_metrics')) {
+                            const serverMetrics = data['server_metrics'];
+                            // console.log('Server Metrics:', serverMetrics);
+                            const feedMetrics = {};
+                            for (let i = 0; i < serverMetrics['feed_uri'].length; i++) {
+                                if (serverMetrics['feed_uri'][i] === '') {
+                                    continue;
+                                }
+                                feedMetrics[serverMetrics['feed_uri'][i]] = serverMetrics['feed_mps'][i];
+                            }
+                            // console.log('Feed Metrics:', feedMetrics);
+                            this.updateMetricsCards('feed', feedMetrics);
+                            // Update labels count
+                            this.feedsCountEl.textContent = `Feeds: ${Object.keys(feedMetrics).length}`;
+                        }
+                        if (data.hasOwnProperty('device_status')) {
+                            const deviceStatus = data['device_status'];
+                            // console.log('Device Status:', deviceStatus);
+                            this.updateDeviceStatus(deviceStatus);
+                        }
+                    } catch (error) {
+                        console.error('Error parsing WebSocket message:', error);
+                    }
                 };
             }
 
@@ -415,11 +610,15 @@
             }
         }
 
-        const metricsWebSocket = new MetricsConnection(WS_CONFIG.metrics_ws_url);
+        // Initialize WebSocket connection for metrics feed
+        const metricsWebSocket = new MetricsWebSocket(WS_CONFIG.metrics_ws_url);
 
+        /**
+         * ADSBee Library
+         */
         class ADSBeeAT {
             static MS_PER_SEC = 1000;
-            static ERROR_BUFFER_FLUSH_INTERVAL_MS = 1000;
+            static ERROR_BUFFER_FLUSH_INTERVAL_MS = 1000; // How long to wait after a parse error to let the error message print.
 
             messageQueue = [];
 
@@ -442,12 +641,13 @@
 
                     this.ws.onmessage = (event) => {
                         const decoded_message = this.decoder.decode(event.data);
-                        console.log('ADSBeeAT received message:', decoded_message);
+                        console.log("ADSBeeAT received message:", decoded_message);
                         this.messageQueue.push(decoded_message);
                         resolve();
                     };
 
                     this.ws.onopen = () => {
+                        // Don't resolve immediately, wait for first message
                     };
 
                     this.ws.onerror = (error) => reject(error);
@@ -482,8 +682,8 @@
             }
 
             async receiveResponse(printResponse = false, waitForResponse = false, responseToWaitFor = 'OK', maxCumulativeTimeoutMs = 6000) {
-                const CPP_AT_PARSE_ERROR_FLUSH_INTERVAL_MS = 1000;
-                const RECEIVE_LOOP_PERIOD_MS = 10;
+                const CPP_AT_PARSE_ERROR_FLUSH_INTERVAL_MS = 1000; // How long to wait after a parse error to let the error message print.
+                const RECEIVE_LOOP_PERIOD_MS = 10; // How often to check for new messages.
                 const decodedResponse = [];
 
                 const cumulativeTimeout = Date.now() + maxCumulativeTimeoutMs;
@@ -498,14 +698,17 @@
                         if (decoded_message.includes(responseToWaitFor)) {
                             waitForResponse = false;
                         } else if (decoded_message.match(/\bERROR\b/)) {
+                            // Catch AT command errors.
                             this.flushInputBuffer(ADSBeeAT.ERROR_BUFFER_FLUSH_INTERVAL_MS);
                             throw new Error(`ERROR response: ${decoded_message}`);
                         } else if (decoded_message.includes('CppAT::')) {
+                            // Catch CppAT parse errors.
                             await new Promise(resolve => setTimeout(resolve, CPP_AT_PARSE_ERROR_FLUSH_INTERVAL_MS));
-                            this.flushInputBuffer(ADSBeeAT.ERROR_BUFFER_FLUSH_INTERVAL_MS);
+                            this.flushInputBuffer(ADSBeeAT.ERROR_BUFFER_FLUSH_INTERVAL_MS); // These can get ugly.
                             throw new Error(`CppAT parse error: ${decoded_message}`);
                         }
 
+                        // Received a decoded message without errors.
                         let logStr = '';
                         try {
                             decodedResponse.push(decoded_message);
@@ -519,15 +722,26 @@
                         }
                     }
 
+                    // Wait for a timeout so that we don't block the event loop.
                     if (this.messageQueue.length > 0) {
-                        continue;
+                        continue; // If we have messages, don't wait.
                     }
                     await new Promise(resolve => setTimeout(resolve, RECEIVE_LOOP_PERIOD_MS));
+
                 }
 
                 return decodedResponse;
             }
 
+            /**
+             * Send an AT command to the ADSBee device.
+             * @param[in] cmdStr The AT command string to send.
+             * @param[in] delay_ms Delay in milliseconds after sending the command.
+             * @param[in] printResponse Whether to print the response to the console.
+             * @param[in] waitForOkOrError Whether to wait for an OK or ERROR response before returning.
+             * @param[in] maxCumulativeTimeoutMs Maximum cumulative timeout in milliseconds.
+             * @return A promise that resolves with the decoded_message response lines.
+             */
             async sendCmd(cmdStr, delay_ms = 10, printResponse = false, waitForResponse = false, responseToWaitFor = 'OK', maxCumulativeTimeoutMs = 6000) {
                 this.lastCmdTimestamp = this.getMsTimestamp();
 
@@ -553,6 +767,7 @@
                             if (attempts >= maxAttempts) {
                                 throw error;
                             }
+                            // Retry the send operation
                             this.ws.send(new TextEncoder().encode(cmdStr));
                         } else {
                             throw error;
@@ -561,6 +776,12 @@
                 }
             }
 
+            /**
+             * Send raw bytes to the ADSBee device.
+             * @param {Uint8Array} data The data to send.
+             * @param {boolean} printResponse Whether to print the response to the console.
+             * @return A promise that resolves with the decoded_message response lines.
+             */
             async sendBytes(data, printResponse = false, waitForOkOrError = false) {
                 const RESPONSE_TO_WAIT_FOR = 'OK';
                 const RESPONSE_TIMEOUT_MS = 6000;
@@ -568,13 +789,22 @@
                 return await this.receiveResponse(printResponse, waitForOkOrError, RESPONSE_TO_WAIT_FOR, RESPONSE_TIMEOUT_MS);
             }
 
+            /**
+             * Silence the console by silencing logs and turning off any output protocols. Call this before sending data
+             * for firmware updates.
+             */
             async silenceConsole() {
-                await this.sendCmd('AT+LOG_LEVEL=ERRORS\r\n', 0, true, true);
-                await this.sendCmd('AT+PROTOCOL_OUT=CONSOLE,NONE\r\n', 0, true, true);
+                await this.sendCmd("AT+LOG_LEVEL=ERRORS\r\n", 0, true, true);
+                await this.sendCmd("AT+PROTOCOL_OUT=CONSOLE,NONE\r\n", 0, true, true);
             }
 
+            /**
+             * Get the flash partition that can currently be read from / written to (e.g. the flash partition that is
+             * not currently being executed from).
+             * @return The current OTA flash partition.
+             */
             async otaGetFlashPartition() {
-                const decodedResponse = await this.sendCmd('AT+OTA=GET_PARTITION\r\n', 0, true, true);
+                const decodedResponse = await this.sendCmd("AT+OTA=GET_PARTITION\r\n", 0, true, true);
 
                 for (const line of decodedResponse) {
                     const match = line.match(/Partition: (\d+)/);
@@ -585,11 +815,17 @@
                 return null;
             }
 
+            /**
+             * Write bytes to the current OTA flash partition.
+             * @param {number} offset The offset in bytes to write to.
+             * @param {Uint8Array} data The data to write.
+             */
             async otaWriteBytes(offset, data) {
                 const crc32 = this.calculateCRC32(data);
-                const cmdResponse = await this.sendCmd(`AT+OTA=WRITE,${offset.toString(16)},${data.length},${crc32.toString(16)}\r\n`, 0, true, true, 'READY');
+                const cmdResponse = await this.sendCmd(`AT+OTA=WRITE,${offset.toString(16)},${data.length},${crc32.toString(16)}\r\n`, 0, true, true, "READY");
                 for (const line of cmdResponse) {
                     if (line.includes('ERROR')) {
+                        // Flush remaining lines then throw the error.
                         await this.flushInputBuffer(ADSBeeAT.ERROR_BUFFER_FLUSH_INTERVAL_MS);
                         throw new Error(`Command failed with error: ${line}`);
                     }
@@ -597,31 +833,43 @@
                 const dataResponse = await this.sendBytes(data, true, true);
                 for (const line of dataResponse) {
                     if (line.includes('ERROR')) {
+                        // Flush remaining lines then throw the error.
                         await this.flushInputBuffer(ADSBeeAT.ERROR_BUFFER_FLUSH_INTERVAL_MS);
                         throw new Error(`Data transfer failed with error: ${line}`);
                     }
                 }
             }
 
+            /**
+             * Erase bytes from the current OTA flash partition.
+             * @param {number} offsetBytes The offset in bytes to erase from.
+             * @param {number} lenBytes The length in bytes to erase.
+             */
             async otaErase(offsetBytes = NaN, lenBytes = NaN) {
-                const ERASE_TIMEOUT_MS = 20000;
+                const ERASE_TIMEOUT_MS = 20000; // Allow 20 seconds for flash erase to complete.
                 if (!isNaN(offsetBytes) && !isNaN(lenBytes)) {
-                    await this.sendCmd(`AT+OTA=ERASE,${offsetBytes.toString(16)},${lenBytes}\r\n`, 0, true, true, 'OK', ERASE_TIMEOUT_MS);
+                    await this.sendCmd(`AT+OTA=ERASE,${offsetBytes.toString(16)},${lenBytes}\r\n`, 0, true, true, "OK", ERASE_TIMEOUT_MS);
                 } else {
-                    await this.sendCmd('AT+OTA=ERASE\r\n', 0, true, true, 'OK', ERASE_TIMEOUT_MS);
+                    // Allow 20 seconds for flash erase to complete.
+                    await this.sendCmd("AT+OTA=ERASE\r\n", 0, true, true, "OK", ERASE_TIMEOUT_MS);
                 }
             }
 
+            /**
+             * Write a file to the current OTA flash partition.
+             * @param {File} file The file to write.
+             */
             async otaWriteFile(file) {
                 const HEADER_SIZE_BYTES = 5 * 4;
                 const APP_OFFSET_BYTES = 4 * 1024;
+                // Going larger than this can cause the heap to explode on the ESP32.
                 const WRITE_CHUNK_BYTES = 0x1000 * 3;
                 const MAX_ATTEMPTS_PER_CHUNK = 3;
 
                 const partition = await this.otaGetFlashPartition();
 
                 if (partition === null) {
-                    throw new Error('Failed to get OTA partition from ADSBee.');
+                    throw new Error("Failed to get OTA partition from ADSBee.");
                 }
 
                 const fileData = await this.readFile(file);
@@ -639,8 +887,10 @@
 
                 await this.otaErase(0, appLenBytes + HEADER_SIZE_BYTES);
 
+                // Write the header
                 await this.otaWriteBytes(0, headerContents);
 
+                // Write the application in chunks
                 for (let i = HEADER_SIZE_BYTES; i < HEADER_SIZE_BYTES + appLenBytes; i += WRITE_CHUNK_BYTES) {
                     const offsetBytes = (i - HEADER_SIZE_BYTES) + APP_OFFSET_BYTES;
                     let success = false;
@@ -648,6 +898,7 @@
                     while (!success && attempts < MAX_ATTEMPTS_PER_CHUNK) {
                         try {
                             if (attempts > 0) {
+                                // We are here on a retry, so erase the chunk first.
                                 await this.otaErase(offsetBytes, WRITE_CHUNK_BYTES);
                             }
                             const chunk = contents.slice(i, Math.min(i + WRITE_CHUNK_BYTES, HEADER_SIZE_BYTES + appLenBytes));
@@ -656,18 +907,27 @@
                         } catch (error) {
                             console.error(error);
                             console.error(`Failed to write chunk at offset ${offsetBytes}. Retrying (${attempts + 1}/${MAX_ATTEMPTS_PER_CHUNK})... `);
-                            attempts++;
+                            attempts++; // Wait to erase until the next loop so that we can re-use the try-catch and don't erase before final failure if the first few retry attempts also fail.
                         }
                     }
                 }
 
-                await this.sendCmd('AT+OTA=VERIFY\r\n', 0, true, true);
+                // Verify and boot the new partition
+                await this.sendCmd("AT+OTA=VERIFY\r\n", 0, true, true);
             }
 
+            /**
+             * Boot the current OTA flash partition.
+             */
             async otaBoot() {
-                await this.sendCmd('AT+OTA=BOOT\r\n', 0, true);
+                await this.sendCmd("AT+OTA=BOOT\r\n", 0, true);
             }
 
+            /**
+             * Read a file as an ArrayBuffer.
+             * @param {File} file The file to read.
+             * @return {Promise<Uint8Array>} A promise that resolves with the file data as an ArrayBuffer.
+             */
             async readFile(file) {
                 return new Promise((resolve, reject) => {
                     const reader = new FileReader();
@@ -677,6 +937,11 @@
                 });
             }
 
+            /**
+             * Calculate the CRC32 checksum of a Uint8Array.
+             * @param {Uint8Array} data The data to calculate the CRC32 checksum for.
+             * @return {number} The CRC32 checksum.
+             */
             calculateCRC32(data) {
                 let crc = 0xFFFFFFFF;
                 for (let i = 0; i < data.length; i++) {
@@ -765,17 +1030,17 @@
 
             async uploadFirmware(file) {
                 let originalOtaWriteBytes = NaN;
-                let adsbee = null;
                 try {
                     this.setUploadingState(true);
                     this.updateProgress(0);
 
-                    adsbee = new ADSBeeAT(this.adsbeeUrl);
+                    const adsbee = new ADSBeeAT(this.adsbeeUrl);
                     await adsbee.connect();
 
-                    const totalSize = file.size / 2;
+                    const totalSize = file.size / 2; // Two firmware images in file, we're only flashing one.
                     let uploadedSize = 0;
 
+                    // Override otaWriteBytes to track progress
                     originalOtaWriteBytes = adsbee.otaWriteBytes.bind(adsbee);
                     adsbee.otaWriteBytes = async (offset, data) => {
                         await originalOtaWriteBytes(offset, data);
@@ -788,6 +1053,7 @@
                     await adsbee.silenceConsole();
                     await adsbee.flushInputBuffer();
 
+                    // Receiver already gets disabled during data chunk transfers, but this simplifies it a bit.
                     await adsbee.sendCmd('AT+RX_ENABLE=0\r\n', 0, true, true);
 
                     await adsbee.otaWriteFile(file);
@@ -796,12 +1062,13 @@
                     this.updateProgress(100);
                     this.showSuccess();
                     await adsbee.disconnect();
+
                 } catch (error) {
                     console.error('Firmware upload failed:', error);
                     this.showError(error.message || 'Failed to upload firmware. Please try again.');
                 } finally {
                     this.setUploadingState(false);
-                    if (adsbee && !isNaN(originalOtaWriteBytes)) {
+                    if (!isNaN(originalOtaWriteBytes)) {
                         adsbee.otaWriteBytes = originalOtaWriteBytes;
                     }
                 }
@@ -841,6 +1108,7 @@
                 await adsbee.connect();
                 const response = await adsbee.sendCmd('AT+SETTINGS?DUMP\r\n', 0, true, true);
 
+                // Only keep lines starting with AT+ 
                 const settingsLines = response.filter(line => line.startsWith('AT+'));
 
                 const blob = new Blob([settingsLines.join('\n')], { type: 'text/plain' });
@@ -869,90 +1137,10 @@
             }
         }
 
-        const BOOTLOADER_CMD = 'AT+BOOT_USB_UF2=1DEADBEE';
-
+        // Initialize the uploader when the page loads
         document.addEventListener('DOMContentLoaded', () => {
             const uploader = new FirmwareUploader(HOST_URI);
             const settingsManager = new SettingsManager(HOST_URI);
-            const wifiSsidInput = document.getElementById('wifiSsid');
-            const wifiPasswordInput = document.getElementById('wifiPassword');
-            const togglePasswordButton = document.getElementById('togglePasswordButton');
-
-            const wifiValidationError = document.getElementById('wifiValidationError');
-            const clearWifiValidationError = () => {
-                wifiValidationError.textContent = '';
-                wifiValidationError.hidden = true;
-            };
-            const showWifiValidationError = (message) => {
-                wifiValidationError.textContent = message;
-                wifiValidationError.hidden = false;
-            };
-
-            async function loadWifiAccessPointSettings() {
-                let adsbee = null;
-                try {
-                    adsbee = new ADSBeeAT(HOST_URI);
-                    await adsbee.connect();
-                    const response = await adsbee.sendCmd('AT+WIFI_AP?\r\n', 0, true, true, 'WIFI_AP=');
-                    const wifiLine = response.find(line => line.includes('WIFI_AP='));
-                    if (!wifiLine) {
-                        return;
-                    }
-
-                    // Format: WIFI_AP=<enabled>,<ssid>,<password>,<channel>
-                    const match = wifiLine.match(/WIFI_AP=\d,([^,]*),([^,]*),\d+/);
-                    if (!match) {
-                        console.warn('Unexpected WIFI_AP response format:', wifiLine);
-                        return;
-                    }
-
-                    const [, ssid, password] = match;
-                    wifiSsidInput.value = ssid;
-                    wifiPasswordInput.value = password;
-                } catch (error) {
-                    console.warn('Failed to query WIFI_AP settings:', error);
-                } finally {
-                    if (adsbee) {
-                        await adsbee.disconnect();
-                    }
-                }
-            }
-
-            wifiSsidInput.addEventListener('input', clearWifiValidationError);
-            wifiPasswordInput.addEventListener('input', clearWifiValidationError);
-
-            togglePasswordButton.addEventListener('click', () => {
-                const showPassword = wifiPasswordInput.type === 'password';
-                wifiPasswordInput.type = showPassword ? 'text' : 'password';
-                togglePasswordButton.textContent = showPassword ? '🙈' : '👁';
-                togglePasswordButton.setAttribute('aria-label', showPassword ? 'Hide password' : 'Show password');
-                togglePasswordButton.setAttribute('title', showPassword ? 'Hide password' : 'Show password');
-            });
-
-            document.getElementById('saveSettingsButton').addEventListener('click', () => {
-                const ssid = wifiSsidInput.value.trim();
-                const password = wifiPasswordInput.value;
-                if (ssid.includes(',') || password.includes(',')) {
-                    showWifiValidationError(
-                        'SSID and password cannot contain a comma.'
-                    );
-                    return;
-                }
-                clearWifiValidationError();
-                const wifiCmd = `AT+WIFI_AP=1,${ssid},${password}`;
-                const saveCmd = 'AT+SETTINGS=SAVE';
-                appendToTerminal(`> ${wifiCmd}\n`);
-                consoleWebSocket.send(`${wifiCmd}\r\n`);
-                appendToTerminal(`> ${saveCmd}\n`);
-                consoleWebSocket.send(`${saveCmd}\r\n`);
-            });
-
-            document.getElementById('enterBootloaderButton').addEventListener('click', () => {
-                appendToTerminal(`> ${BOOTLOADER_CMD}\n`);
-                consoleWebSocket.send(`${BOOTLOADER_CMD}\r\n`);
-            });
-
-            loadWifiAccessPointSettings();
         });
     </script>
 </body>
