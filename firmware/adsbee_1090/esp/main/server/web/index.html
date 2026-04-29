@@ -1115,7 +1115,7 @@
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `RADaero_${new Date().toISOString().replace(/[:.]/g, '-')}.settings`;
+                a.download = `adsbee_${new Date().toISOString().replace(/[:.]/g, '-')}.settings`;
                 a.click();
                 URL.revokeObjectURL(url);
             }

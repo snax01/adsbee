@@ -50,6 +50,8 @@ extern GDL90Reporter::GDL90TargetReportData ownship_data;
 bool CanbusInit(can_termination_t term_res_enable);
 void transmit_can(uint32_t canID, eMCP251XFD_DataLength DLC, uint8_t *data);
 void check_can_errors();
+void send_heartbeat();
+void request_UID();
 
 /**
  * @brief Initialize SPI bus for MCP251XFD

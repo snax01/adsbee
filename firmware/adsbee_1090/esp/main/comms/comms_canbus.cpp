@@ -16,7 +16,7 @@ extern GDL90Reporter gdl90;
 // ADSBEE INCLUDES
 
 
-#define SPI_HOST_ID         SPI2_HOST  // Using SPI2 (HSPI) - SPI0/SPI1 are typically used for flash/PSRAM
+#define SPI_HOST_ID         SPI2_HOST
 
 static spi_device_handle_t  can_spi_handle = NULL;
 
@@ -41,6 +41,7 @@ static spi_device_handle_t  can_spi_handle = NULL;
 #define CANMSG_HEARTBEAT            0x750
 #define CANMSG_UID_REQUEST          0x760
 #define CANMSG_UID_ASSIGN           0x770
+#define CANMSG_DISCONNECT_CLIENT    0x780
 
 // Buffer for received message data
 uint8_t rx_data[64];
@@ -114,13 +115,13 @@ static spi_device_interface_config_t devcfg = {
 };
 
 
-
-GDL90Reporter::GDL90TargetReportData ownship_data = { .traffic_alert_status = 0,
-                                                      .address_type = GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress, 
-                                                      .participant_address = 0x111111,
-                                                      .misc_indicators = 0,
-                                                      .emergency_priority_code = GDL90Reporter::GDL90TargetReportData::kEmergencyPriorityCodeNoEmergency,
-                                                     };
+GDL90Reporter::GDL90TargetReportData ownship_data = 
+    { .traffic_alert_status = 0,
+     .address_type = GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress, 
+     .participant_address = 0x111111,
+     .misc_indicators = 0,
+     .emergency_priority_code = GDL90Reporter::GDL90TargetReportData::kEmergencyPriorityCodeNoEmergency,
+    };
 
 
 static bool check_rx_fifo(void)
@@ -141,42 +142,72 @@ void process_rx_msg()   {
         &ts,                        // NULL if you don't want timestamp, need to change in fifo_conf if i want to remove timestamp
         MCP251XFD_FIFO1);
 
-
-    if (rx_message.MessageID == CANMSG_ADSB_OWNSHIP_STATE)  {
-        memcpy(&time_since_zulu, &rx_data[0], sizeof(uint32_t));
-        memcpy(&ownship_data.latitude_deg, &rx_data[4], sizeof(float));
-        memcpy(&ownship_data.longitude_deg, &rx_data[8], sizeof(float));
-        memcpy(&ownship_data.altitude_ft, &rx_data[12], sizeof(int32_t));
-        memcpy(&ownship_data.speed_kts, &rx_data[16], sizeof(float));
-        memcpy(&ownship_data.direction_deg, &rx_data[20], sizeof(float));
-        memcpy(&ownship_data.vertical_rate_fpm, &rx_data[24], sizeof(int32_t));
-        if (time_since_zulu != 0)   {   // Should I have a better way to identify when these flags should flip?
-            gdl90.utc_timing_is_valid = true;
-            gdl90.gnss_position_valid = true;
+    switch (rx_message.MessageID)   {
+        case (CANMSG_ADSB_OWNSHIP_STATE):   {
+            memcpy(&time_since_zulu, &rx_data[0], sizeof(uint32_t));
+            memcpy(&ownship_data.latitude_deg, &rx_data[4], sizeof(float));
+            memcpy(&ownship_data.longitude_deg, &rx_data[8], sizeof(float));
+            memcpy(&ownship_data.altitude_ft, &rx_data[12], sizeof(int32_t));
+            memcpy(&ownship_data.speed_kts, &rx_data[16], sizeof(float));
+            memcpy(&ownship_data.direction_deg, &rx_data[20], sizeof(float));
+            memcpy(&ownship_data.vertical_rate_fpm, &rx_data[24], sizeof(int32_t));
+            if (time_since_zulu != 0)   {   // Should I have a better way to identify when these flags should flip?
+                gdl90.utc_timing_is_valid = true;
+                gdl90.gnss_position_valid = true;
+            }
+            CONSOLE_INFO("RADbus", "STATE ownship received.");
+            break;
         }
-        CONSOLE_INFO("RADbus", "STATE ownship received.");
-        return;
-    }
 
-    // TODO - need to set gnss_position_valid and utc_timing_is_valid if RADbus data is valid.
-    if (rx_message.MessageID == CANMSG_ADSB_OWNSHIP_IDENT)  {
-        memcpy(&ownship_data.callsign, &rx_data[0], 8);
-        memcpy(&ownship_data.participant_address, &rx_data[8], 4);
-        memcpy(&ownship_data.address_type, &rx_data[12], 1);
-        memcpy(&ownship_data.emitter_category, &rx_data[13], 1);
-        memcpy(&ownship_data.navigation_integrity_category, &rx_data[14], 1);
-        memcpy(&ownship_data.navigation_accuracy_category_position, &rx_data[15], 1);
-        memcpy(&ownship_data.misc_indicators, &rx_data[16], 1);
-        CONSOLE_INFO("RADbus", "IDENT ownship received.");
-        return;
-    }
+        // TODO - need to set gnss_position_valid and utc_timing_is_valid if RADbus data is valid.
+        case (CANMSG_ADSB_OWNSHIP_IDENT):    {
+            memcpy(&ownship_data.callsign, &rx_data[0], 8);
+            memcpy(&ownship_data.participant_address, &rx_data[8], 4);
+            memcpy(&ownship_data.address_type, &rx_data[12], 1);
+            memcpy(&ownship_data.emitter_category, &rx_data[13], 1);
+            memcpy(&ownship_data.navigation_integrity_category, &rx_data[14], 1);
+            memcpy(&ownship_data.navigation_accuracy_category_position, &rx_data[15], 1);
+            memcpy(&ownship_data.misc_indicators, &rx_data[16], 1);
+            CONSOLE_INFO("RADbus", "IDENT ownship received.");
+            break;
+        }
 
-    if (rx_message.MessageID == CANMSG_UID_ASSIGN)  {
-        RADbus_UID = rx_data[0];
-        efis_connected = true;
-        CONSOLE_WARNING("RADbus", "UID assign received.");
-        return;
+        case (CANMSG_UID_ASSIGN):    {
+            if (rx_data[0] != 0x99) {
+                RADbus_UID = rx_data[0];
+                efis_connected = true;
+                CONSOLE_WARNING("RADbus", "UID assign received.");
+            }   else    {
+                CONSOLE_ERROR("RADbus", "RADbus reached max clients, no client ID given.");
+                // TODO - handle this.
+            }
+            break;
+        }
+
+        case (CANMSG_DISCONNECT_CLIENT):    {
+            if (rx_data[0] == RADbus_UID)   {
+                efis_connected = false;
+                RADbus_UID = 0xFF;
+            }
+        }
     }
+}
+
+void request_UID()  {
+    uint8_t UID_request[8];
+    memcpy(&UID_request[0], &serial_num, sizeof(uint32_t));
+    memcpy(&UID_request[4], &ObjectDictionary::kFirmwareVersion, sizeof(uint32_t));
+
+    transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
+}
+
+void send_heartbeat()   {
+    if (efis_connected) {
+        transmit_can(CANMSG_HEARTBEAT, MCP251XFD_DLC_1BYTE, &RADbus_UID);
+    }   else    {
+        request_UID();
+    }
+    last_heartbeat = get_time_since_boot_ms();
 }
 
 
@@ -185,19 +216,21 @@ void canbus_task(void* pvParameters)    {
 
     queue_msg_t queue_rx_buf = { 0 };
 
+    send_heartbeat();
+
     while (1)   {
 
         vTaskDelay(pdMS_TO_TICKS(10));
-
-        if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
-            transmit_can(CANMSG_HEARTBEAT, MCP251XFD_DLC_1BYTE, &RADbus_UID);
-            last_heartbeat = get_time_since_boot_ms();
-        }
 
         if (gpio_get_level(CAN_RX_INT_PIN) == 0)    {
             while (check_rx_fifo())    {
                 process_rx_msg();
             }
+        }
+
+        // Send Radbus heartbeat once/sec
+        if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
+            send_heartbeat();
         }
 
         if (efis_connected) {
@@ -493,28 +526,10 @@ bool CanbusInit(can_termination_t term_res_enable)   {
 
     //gpio_isr_handler_add(CAN_RX_INT_PIN, CANRX_isr_handler, NULL);
 
-    while(!efis_connected)  {
-
-        uint8_t UID_request[8];
-        memcpy(&UID_request[0], &serial_num, sizeof(uint32_t));
-        memcpy(&UID_request[4], &ObjectDictionary::kFirmwareVersion, sizeof(uint32_t));
-        
-        vTaskDelay(pdMS_TO_TICKS(100));
-
-        if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
-            transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
-            last_heartbeat = get_time_since_boot_ms();
-        }
-
-        if (gpio_get_level(CAN_RX_INT_PIN) == 0)    {
-            while (check_rx_fifo())    {
-                process_rx_msg();
-            }
-        }
-    }
-    
     return true;
 }
+
+
 
 void transmit_can(uint32_t canID, eMCP251XFD_DataLength DLC, uint8_t *data) {
 
