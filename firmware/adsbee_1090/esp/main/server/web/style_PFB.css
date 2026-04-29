@@ -1,0 +1,286 @@
+.page-container {
+    display: flex;
+    flex-direction: column;
+    /* Ensures a vertical column layout */
+}
+
+.column-element {
+    margin: 0.5rem 0;
+    /* Optional: Adds space between the divs */
+}
+
+/* Terminal styling */
+#terminal {
+    /* Keep width just below 100% to avoid horizontal scroll bar. */
+    width: 98%;
+    height: 400px;
+    background: black;
+    color: #ffffff;
+    font-family: 'Courier New', monospace;
+    padding: 10px;
+    overflow-y: scroll;
+    position: relative;
+    cursor: text;
+}
+
+#terminal-content {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+#cursor {
+    display: inline-block;
+    background: #ffffff;
+    animation: blink 1s step-end infinite;
+    color: #000000;
+    min-width: 0.6em;
+    min-height: 1.2em;
+    vertical-align: middle;
+}
+
+#cursor:before {
+    content: attr(data-char);
+    color: #000000;
+}
+
+@keyframes blink {
+
+    0%,
+    50% {
+        background: #ffffff;
+        color: #000000;
+    }
+
+    51%,
+    100% {
+        background: #000000;
+        color: #ffffff;
+    }
+}
+
+.input-line {
+    display: flex;
+    align-items: center;
+}
+
+.prompt {
+    color: #ffffff;
+    margin-right: 8px;
+}
+
+.hidden-input {
+    position: absolute;
+    opacity: 0;
+    height: 0;
+    width: 0;
+}
+
+.metrics {
+    display: block;
+    flex-wrap: wrap;
+    border-radius: 8px;
+    font-family: Arial;
+}
+
+.metrics-card {
+    background: white;
+    margin: 1rem;
+    padding: 1rem;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    display: inline-block;
+}
+
+.metrics-title {
+    color: #64748b;
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.metrics-header {
+    font-family: Arial;
+    padding: 1rem;
+    padding-bottom: 0;
+    font-weight: bold;
+}
+
+.metrics-value {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.device-status {
+    text-align: left;
+    display: block;
+}
+
+.device-status-cards {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.device-card {
+    background: white;
+    margin: 1rem;
+    padding: 1rem;
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    display: inline-block;
+    min-width: 200px;
+}
+
+.sparkline {
+    margin-top: 0.5rem;
+    height: 30px;
+}
+
+.sparkline path {
+    stroke: #ffcb00;
+    stroke-width: 2;
+    fill: none;
+}
+
+.sparkline path.area {
+    fill: #ffdd54;
+    opacity: 0.5;
+}
+
+.connection-status {
+    /* position: fixed;
+    top: 1rem;
+    right: 1rem; */
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    font-family: Arial;
+}
+
+.connection-status.connected {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.connection-status.disconnected {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.labels-count {
+    /* position: fixed;
+    top: 1rem;
+    left: 1rem; */
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-size: 0.875rem;
+    background: #f1f5f9;
+    color: #475569;
+}
+
+/* Upload button styling */
+.tools-container {
+    max-width: 100%;
+    margin: 20px auto;
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+}
+
+.tools-container .button-row {
+    width: 100%;
+    justify-content: center;
+    display: flex;
+    flex-direction: row;
+}
+
+.tools-button {
+    width: 100%;
+    padding: 12px;
+    margin: 12px;
+    max-width: 200px;
+    background-color: #ffcb00;
+    color: black;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+}
+
+.tools-button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+.progress-container {
+    margin-top: 16px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+}
+
+.progress-bar {
+    min-width: 200px;
+    margin: auto 15%;
+    height: 20px;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: #ffcb00;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.progress-text {
+    text-align: center;
+    margin-top: 8px;
+    font-size: 14px;
+    color: #666;
+}
+
+.alert {
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 4px;
+    display: none;
+}
+
+.alert.success {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.alert.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    border-top-color: transparent;
+    animation: spin 1s linear infinite;
+}
