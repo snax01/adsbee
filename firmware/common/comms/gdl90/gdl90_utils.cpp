@@ -1,6 +1,6 @@
 #include "gdl90_utils.hh"
-
 #include "comms.hh"
+#include "string.h"
 
 // Initialize static variables.
 const uint16_t GDL90Reporter::kGDL90CRC16Table[] = {
@@ -65,6 +65,72 @@ uint16_t GDL90Reporter::WriteBufferWithGDL90Escapes(uint8_t* to_buf, uint16_t to
         }
     }
     return bytes_written;
+}
+
+namespace {
+
+void SetOwnshipGDL90Unavailable(GDL90Reporter::GDL90TargetReportData& ownship) {
+    ownship.traffic_alert_status = false;
+    ownship.address_type = GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress;
+    ownship.participant_address = 0;
+    ownship.latitude_deg = 0.0f;
+    ownship.longitude_deg = 0.0f;
+    ownship.altitude_ft = INT32_MIN;  // Encodes as 0xFFF (invalid/unavailable).
+    ownship.misc_indicators = 0;
+    ownship.navigation_integrity_category = 0;
+    ownship.navigation_accuracy_category_position = 0;
+    ownship.speed_kts = -1.0f;  // Encodes as 0xFFF (unavailable).
+    ownship.vertical_rate_fpm = GDL90Reporter::GDL90TargetReportData::kVerticalRateUnavailableFpm;
+    ownship.direction_deg = 0.0f;
+    ownship.emitter_category = 0;
+    memcpy(ownship.callsign, "ADSBEE  ", sizeof(ownship.callsign) - 1);
+    ownship.emergency_priority_code =
+        GDL90Reporter::GDL90TargetReportData::kEmergencyPriorityCodeNoEmergency;
+}
+
+void ApplyOwnshipFromRxPosition(GDL90Reporter::GDL90TargetReportData& ownship,
+                                const SettingsManager::RxPosition& rx_position) {
+    ownship.latitude_deg = rx_position.latitude_deg;
+    ownship.longitude_deg = rx_position.longitude_deg;
+    ownship.altitude_ft = rx_position.baro_altitude_ft;
+    ownship.speed_kts = static_cast<float>(rx_position.speed_kts);
+    ownship.direction_deg = rx_position.heading_deg;
+    ownship.participant_address = rx_position.icao_address;
+}
+
+/** Baseline ownship report when not using RADbus (matches original ReportGDL90). */
+void SetOwnshipDefaultAdsbee(GDL90Reporter::GDL90TargetReportData& ownship) {
+    ownship = {};
+    memcpy(ownship.callsign, "ADSBEE  ", sizeof(ownship.callsign) - 1);
+    ownship.address_type = GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress;
+    ownship.participant_address = 0;
+}
+
+}  // namespace
+
+void GDL90Reporter::UpdateOwnshipFromRxPosition(const SettingsManager::RxPosition& rx_position,
+                                                bool radbus_efis_connected) {
+    if (rx_position.source == SettingsManager::RxPosition::kPositionSourceRADbus) {
+        if (!radbus_efis_connected) {
+            SetOwnshipGDL90Unavailable(ownship_data);
+            return;
+        }
+        ApplyOwnshipFromRxPosition(ownship_data, rx_position);
+        // Callsign, emitter category, NIC/NACp, and misc indicators come from CAN IDENT via comms_canbus.
+        return;
+    }
+
+    // All non-RADbus sources: original ReportGDL90 ownship logic.
+    SetOwnshipDefaultAdsbee(ownship_data);
+    if (rx_position.source == SettingsManager::RxPosition::kPositionSourceAircraftMatchingICAO) {
+        ownship_data.latitude_deg = rx_position.latitude_deg;
+        ownship_data.longitude_deg = rx_position.longitude_deg;
+        ownship_data.altitude_ft = rx_position.baro_altitude_ft;
+        ownship_data.speed_kts = rx_position.speed_kts;
+        ownship_data.direction_deg = rx_position.heading_deg;
+        ownship_data.participant_address = rx_position.icao_address;
+        ownship_data.SetMiscIndicator(GDL90TargetReportData::kMiscIndicatorTTIsTrueTrackAngle, false, false);
+    }
 }
 
 uint16_t GDL90Reporter::WriteGDL90HeartbeatMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes,

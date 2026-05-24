@@ -99,6 +99,8 @@ bool CommsManager::EthernetInit() {
     buscfg.sclk_io_num = config_.aux_spi_clk_pin;
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
+    // Default (4092) reserves a large DMA pool on SPI3; keep modest for shared aux bus with CAN.
+    buscfg.max_transfer_sz = CommsManager::NetworkMessage::kMaxLenBytes;
 
     // W5500 SPI device configuration.
     // command_bits = 16 (address phase in W5500 SPI frame), address_bits = 8 (control phase) are left at 0.

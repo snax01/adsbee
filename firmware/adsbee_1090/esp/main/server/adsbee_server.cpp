@@ -1,6 +1,7 @@
 #include "adsbee_server.hh"
 
 #include "comms.hh"
+#include "comms_canbus.hh"
 #include "gdl90/gdl90_utils.hh"
 #include "json_utils.hh"
 #include "pico.hh"
@@ -99,6 +100,10 @@ bool ADSBeeServer::Init() {
     settings_manager.Print();
     settings_manager.Apply();
 
+    if (!CanbusInit(CAN_TERM_ON)) {
+        CONSOLE_WARNING("ADSBeeServer::Init", "CAN bus initialization failed; CAN output disabled.");
+    }
+
     return TCPServerInit();
 }
 
@@ -109,6 +114,8 @@ bool ADSBeeServer::Update() {
     pico.UpdateLED();
 
     uint32_t timestamp_ms = get_time_since_boot_ms();
+
+    CanbusUpdate();
 
     // Prune aircraft dictionary. Need to do this up front so that we don't end up with a negative timestamp delta
     // caused by packets being ingested more recently than the timestamp we take at the beginning of this function.
@@ -193,8 +200,9 @@ bool ADSBeeServer::Update() {
                              decoded_packet.icao_address);
 #endif
 
-                if (!aircraft_dictionary.IngestDecodedModeSPacket(decoded_packet)) {
-                    // NOTE: Pushing to a queue here will only forward valid packets!
+                if (aircraft_dictionary.IngestDecodedModeSPacket(decoded_packet)) {
+                    ReportCANFromIngestedModeSPacket(decoded_packet);
+                } else {
                     CONSOLE_ERROR("ADSBeeServer::Update",
                                   "Failed to ingest decoded Mode S packet into aircraft dictionary.");
                 }
@@ -208,7 +216,9 @@ bool ADSBeeServer::Update() {
                     CONSOLE_ERROR("ADSBeeServer::Update", "Received invalid UAT ADSB packet.");
                     continue;
                 }
-                if (!aircraft_dictionary.IngestDecodedUATADSBPacket(decoded_packet)) {
+                if (aircraft_dictionary.IngestDecodedUATADSBPacket(decoded_packet)) {
+                    ReportCANFromIngestedUATPacket(decoded_packet);
+                } else {
                     CONSOLE_ERROR("ADSBeeServer::Update",
                                   "Failed to ingest decoded UAT ADSB packet into aircraft dictionary.");
                 }
@@ -283,24 +293,12 @@ bool ADSBeeServer::ReportGDL90() {
     message.len = 0;
 
     // Ownship Report
-    GDL90Reporter::GDL90TargetReportData ownship_data = {};
-    memcpy(ownship_data.callsign, "ADSBEE  ", sizeof(ownship_data.callsign) - 1);
-    ownship_data.address_type = GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress;
-    SettingsManager::RxPosition& rx_position = object_dictionary.composite_device_status.rp2040.rx_position;
-    ownship_data.participant_address = 0x0;
-    if (rx_position.source == SettingsManager::RxPosition::PositionSource::kPositionSourceAircraftMatchingICAO) {
-        // Only send ownship data with a position if we are tracking an aircraft.
-        ownship_data.latitude_deg = rx_position.latitude_deg;
-        ownship_data.longitude_deg = rx_position.longitude_deg;
-        ownship_data.altitude_ft = rx_position.baro_altitude_ft;
-        ownship_data.speed_kts = rx_position.speed_kts;
-        ownship_data.direction_deg = rx_position.heading_deg;
-        ownship_data.participant_address = rx_position.icao_address;
-        ownship_data.SetMiscIndicator(GDL90Reporter::GDL90TargetReportData::kMiscIndicatorTTIsTrueTrackAngle, false,
-                                      false);
-    }
+    SettingsManager::RxPosition& rx_position = efis_connected
+                                                   ? GetRadbusRxPosition()
+                                                   : object_dictionary.composite_device_status.rp2040.rx_position;
+    gdl90.UpdateOwnshipFromRxPosition(rx_position, efis_connected);
     message.len = gdl90.WriteGDL90TargetReportMessage(message.data, CommsManager::NetworkMessage::kMaxLenBytes,
-                                                      ownship_data, true);
+                                                      gdl90.ownship_data, true);
     comms_manager.WiFiAccessPointSendMessageToAllStations(message);
     message.len = 0;
 
@@ -313,7 +311,7 @@ bool ADSBeeServer::ReportGDL90() {
 
         if (ModeSAircraft* mode_s_aircraft = get_if<ModeSAircraft>(&(itr.second)); mode_s_aircraft) {
             if (!mode_s_aircraft->HasBitFlag(ModeSAircraft::kBitFlagPositionValid) ||
-                mode_s_aircraft->icao_address == ownship_data.participant_address) {
+                mode_s_aircraft->icao_address == gdl90.ownship_data.participant_address) {
                 // Don't report aircraft without a valid position, and ignore ownship position when bootstrapping off a
                 // fixed ICAO.
                 continue;
@@ -324,7 +322,7 @@ bool ADSBeeServer::ReportGDL90() {
                                                                        *mode_s_aircraft, false);
         } else if (UATAircraft* uat_aircraft = get_if<UATAircraft>(&(itr.second)); uat_aircraft) {
             if (!uat_aircraft->HasBitFlag(UATAircraft::kBitFlagPositionValid) ||
-                uat_aircraft->icao_address == ownship_data.participant_address) {
+                uat_aircraft->icao_address == gdl90.ownship_data.participant_address) {
                 // Don't report aircraft without a valid position, and ignore ownship position when bootstrapping off a
                 // fixed ICAO.
                 continue;

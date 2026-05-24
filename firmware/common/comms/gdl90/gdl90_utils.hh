@@ -2,6 +2,7 @@
 
 #include "aircraft_dictionary.hh"
 #include "macros.hh"  // for MIN macro.
+#include "settings.hh"
 
 // GDL90 is implemented based on this spec:
 // https://www.faa.gov/sites/faa.gov/files/air_traffic/technology/adsb/archival/GDL90_Public_ICD_RevA.PDF
@@ -177,6 +178,13 @@ class GDL90Reporter {
     uint16_t WriteGDL90TargetReportMessage(uint8_t* to_buf, uint16_t to_buf_num_bytes, const UATAircraft& aircraft,
                                            bool ownship = false);
 
+    /**
+     * Populate ownship_data for GDL90 ownship reports from rx_position.
+     * kPositionSourceRADbus uses radbus_efis_connected: when false, ownship uses GDL90 unavailable encodings.
+     * All other sources use the original ADSBEE / ICAO-bootstrap logic regardless of EFIS connection.
+     */
+    void UpdateOwnshipFromRxPosition(const SettingsManager::RxPosition& rx_position, bool radbus_efis_connected);
+
     // Bit Flags for Message ID 0 (Heartbeat).
     bool uat_initialized = true;
     bool gnss_position_valid = false;
@@ -191,6 +199,12 @@ class GDL90Reporter {
     bool cdti_ok = false;
     bool csa_audio_disable = false;
     bool csa_disable = false;
+
+    // Ownship state shared by GDL90 output and RADbus CAN input.
+    GDL90TargetReportData ownship_data = {
+        .address_type = GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress,
+        .participant_address = 0,
+    };
 
     /**
      * Calculate a 16-bit CRC using the pre-calculated GDL90 CRC table.

@@ -3,20 +3,18 @@
 
 #include "comms_canbus.hh"
 #include "mcp251863/fifo_conf.h"
-#include "driver/spi_master.h"
-#include "driver/gpio.h"
-#include "freertos/queue.h"
-
-// ADSBEE INCLUDES
-#include "adsbee_server.hh"         // This gives us access to adsbee_server.aircraft_dictionary...
+#include "adsbee_server.hh"
 #include "aircraft_dictionary.hh"
-#include "task_priorities.hh"
+#include "driver/gpio.h"
+#include "driver/spi_master.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "hal.hh"
 #include "object_dictionary.hh"
+
 extern GDL90Reporter gdl90;
-// ADSBEE INCLUDES
 
-
-#define SPI_HOST_ID         SPI2_HOST
+#define CAN_SPI_HOST SPI3_HOST
 
 static spi_device_handle_t  can_spi_handle = NULL;
 
@@ -32,6 +30,13 @@ static spi_device_handle_t  can_spi_handle = NULL;
 #define SPI_CS_PIN          GPIO_NUM_18
 
 #define SPI_CLOCK           8000000    // 8 MHz (slowed down for 20MHz crystal)
+
+// MCP251XFD SPI frames are small (see MCP251XFD_TRANS_BUF_SIZE). Keep this low to limit
+// SPI master DMA heap reserved at spi_bus_initialize() time on memory-tight builds.
+#define CAN_SPI_MAX_TRANSFER_BYTES 128
+
+// Shared DMA staging buffer for MCP251XFD SPI (stack buffers are not cache/DMA-safe on ESP32-S3).
+alignas(64) static uint8_t s_can_spi_dma_buf[CAN_SPI_MAX_TRANSFER_BYTES];
 
 #define CANMSG_ADSB_AIRCRAFT_OUT    0x120
 #define CANMSG_ADSB_OWNSHIP_STATE   0x130
@@ -66,8 +71,11 @@ uint32_t serial_num = 0xFF123456;
 
 uint32_t time_since_zulu;
 
-extern QueueHandle_t CAN_msg_tx_queue;
-TaskHandle_t canbus_task_handle = NULL;
+static SettingsManager::RxPosition radbus_rx_position = {};
+
+SettingsManager::RxPosition& GetRadbusRxPosition() { return radbus_rx_position; }
+
+static bool canbus_initialized = false;
 
 
 // MCP251XFD Device Configuration
@@ -99,7 +107,7 @@ static spi_bus_config_t buscfg = {
     .sclk_io_num = SPI_SCLK_PIN,
     .quadwp_io_num = -1,
     .quadhd_io_num = -1,
-    .max_transfer_sz = 4096,
+    .max_transfer_sz = CAN_SPI_MAX_TRANSFER_BYTES,
 };
 
 // SPI Device Configuration Structure
@@ -113,15 +121,6 @@ static spi_device_interface_config_t devcfg = {
     .pre_cb = NULL,
     .post_cb = NULL
 };
-
-
-GDL90Reporter::GDL90TargetReportData ownship_data = 
-    { .traffic_alert_status = 0,
-     .address_type = GDL90Reporter::GDL90TargetReportData::kAddressTypeADSBWithSelfAssignedAddress, 
-     .participant_address = 0x111111,
-     .misc_indicators = 0,
-     .emergency_priority_code = GDL90Reporter::GDL90TargetReportData::kEmergencyPriorityCodeNoEmergency,
-    };
 
 
 static bool check_rx_fifo(void)
@@ -145,13 +144,16 @@ void process_rx_msg()   {
     switch (rx_message.MessageID)   {
         case (CANMSG_ADSB_OWNSHIP_STATE):   {
             memcpy(&time_since_zulu, &rx_data[0], sizeof(uint32_t));
-            memcpy(&ownship_data.latitude_deg, &rx_data[4], sizeof(float));
-            memcpy(&ownship_data.longitude_deg, &rx_data[8], sizeof(float));
-            memcpy(&ownship_data.altitude_ft, &rx_data[12], sizeof(int32_t));
-            memcpy(&ownship_data.speed_kts, &rx_data[16], sizeof(float));
-            memcpy(&ownship_data.direction_deg, &rx_data[20], sizeof(float));
-            memcpy(&ownship_data.vertical_rate_fpm, &rx_data[24], sizeof(int32_t));
-            if (time_since_zulu != 0)   {   // Should I have a better way to identify when these flags should flip?
+            radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceRADbus;
+            memcpy(&radbus_rx_position.latitude_deg, &rx_data[4], sizeof(float));
+            memcpy(&radbus_rx_position.longitude_deg, &rx_data[8], sizeof(float));
+            memcpy(&radbus_rx_position.baro_altitude_ft, &rx_data[12], sizeof(int32_t));
+            float speed_kts = 0.0f;
+            memcpy(&speed_kts, &rx_data[16], sizeof(float));
+            radbus_rx_position.speed_kts = static_cast<int32_t>(speed_kts);
+            memcpy(&radbus_rx_position.heading_deg, &rx_data[20], sizeof(float));
+            memcpy(&gdl90.ownship_data.vertical_rate_fpm, &rx_data[24], sizeof(int32_t));
+            if (time_since_zulu != 0) {
                 gdl90.utc_timing_is_valid = true;
                 gdl90.gnss_position_valid = true;
             }
@@ -159,15 +161,16 @@ void process_rx_msg()   {
             break;
         }
 
-        // TODO - need to set gnss_position_valid and utc_timing_is_valid if RADbus data is valid.
         case (CANMSG_ADSB_OWNSHIP_IDENT):    {
-            memcpy(&ownship_data.callsign, &rx_data[0], 8);
-            memcpy(&ownship_data.participant_address, &rx_data[8], 4);
-            memcpy(&ownship_data.address_type, &rx_data[12], 1);
-            memcpy(&ownship_data.emitter_category, &rx_data[13], 1);
-            memcpy(&ownship_data.navigation_integrity_category, &rx_data[14], 1);
-            memcpy(&ownship_data.navigation_accuracy_category_position, &rx_data[15], 1);
-            memcpy(&ownship_data.misc_indicators, &rx_data[16], 1);
+            radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceRADbus;
+            memcpy(&gdl90.ownship_data.callsign, &rx_data[0], 8);
+            memcpy(&radbus_rx_position.icao_address, &rx_data[8], sizeof(uint32_t));
+            memcpy(&gdl90.ownship_data.participant_address, &rx_data[8], sizeof(uint32_t));
+            memcpy(&gdl90.ownship_data.address_type, &rx_data[12], 1);
+            memcpy(&gdl90.ownship_data.emitter_category, &rx_data[13], 1);
+            memcpy(&gdl90.ownship_data.navigation_integrity_category, &rx_data[14], 1);
+            memcpy(&gdl90.ownship_data.navigation_accuracy_category_position, &rx_data[15], 1);
+            memcpy(&gdl90.ownship_data.misc_indicators, &rx_data[16], 1);
             CONSOLE_INFO("RADbus", "IDENT ownship received.");
             break;
         }
@@ -176,6 +179,7 @@ void process_rx_msg()   {
             if (rx_data[0] != 0x99) {
                 RADbus_UID = rx_data[0];
                 efis_connected = true;
+                radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceRADbus;
                 CONSOLE_WARNING("RADbus", "UID assign received.");
             }   else    {
                 CONSOLE_ERROR("RADbus", "RADbus reached max clients, no client ID given.");
@@ -188,6 +192,9 @@ void process_rx_msg()   {
             if (rx_data[0] == RADbus_UID)   {
                 efis_connected = false;
                 RADbus_UID = 0xFF;
+                radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceNone;
+                gdl90.gnss_position_valid = false;
+                gdl90.utc_timing_is_valid = false;
             }
         }
     }
@@ -201,184 +208,197 @@ void request_UID()  {
     transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
 }
 
-void send_heartbeat()   {
+void send_heartbeat() {
     if (efis_connected) {
         transmit_can(CANMSG_HEARTBEAT, MCP251XFD_DLC_1BYTE, &RADbus_UID);
-    }   else    {
+    } else {
         request_UID();
     }
     last_heartbeat = get_time_since_boot_ms();
 }
 
 
-void canbus_task(void* pvParameters)    {
-    CanbusInit(CAN_TERM_ON);
+bool CanbusIsInitialized() { return canbus_initialized; }
 
-    queue_msg_t queue_rx_buf = { 0 };
+static const uint32_t kCANHeartbeatIntervalMs = 1000;
 
-    send_heartbeat();
+void CanbusUpdate() {
+    if (!canbus_initialized) {
+        return;
+    }
 
-    while (1)   {
-
-        vTaskDelay(pdMS_TO_TICKS(10));
-
-        if (gpio_get_level(CAN_RX_INT_PIN) == 0)    {
-            while (check_rx_fifo())    {
-                process_rx_msg();
-            }
+    if (gpio_get_level(CAN_RX_INT_PIN) == 0) {
+        while (check_rx_fifo()) {
+            process_rx_msg();
         }
+    }
 
-        // Send Radbus heartbeat once/sec
-        if (last_heartbeat + 1000 <=  get_time_since_boot_ms()) {
-            send_heartbeat();
-        }
-
-        if (efis_connected) {
-            if (xQueueReceive(CAN_msg_tx_queue, &queue_rx_buf, 0) == pdPASS) {
-            ModeSAircraft aircraft_mode_s;
-            UATAircraft aircraft_uat;
-
-            if ( ( static_cast<uint8_t>(queue_rx_buf.packet_type) ) >= 1 && ( static_cast<uint8_t>(queue_rx_buf.packet_type) <= 31 ) )  {
-                adsbee_server.aircraft_dictionary.GetAircraft(queue_rx_buf.uid, aircraft_mode_s);
-            }   else if ( ( static_cast<uint8_t>(queue_rx_buf.packet_type) ) >= 40 && ( static_cast<uint8_t>(queue_rx_buf.packet_type) <= 44 ) ) {
-                adsbee_server.aircraft_dictionary.GetAircraft(queue_rx_buf.uid, aircraft_uat);
-            }   else {
-                break;
-            }
-            
-
-            switch (static_cast<uint8_t>(queue_rx_buf.packet_type)) {
-                case MODE_S_IDENT:      // TC = 1 (Aircraft Identification)
-                case MODE_S_IDENT + 1:  // TC = 2 (Aircraft Identification)
-                case MODE_S_IDENT + 2:  // TC = 3 (Aircraft Identification)
-                case MODE_S_IDENT + 3: {// TC = 4 (Aircraft Identification)
-                    uint8_t tx_buf[16] = { 0 };
-                    tx_buf[0] = queue_rx_buf.packet_type;
-                    memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
-                    memcpy(&tx_buf[5], &aircraft_mode_s.callsign, 8);
-                    tx_buf[13] = aircraft_mode_s.emitter_category;
-
-                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
-                    break;
-                }
-
-                case MODE_S_SURFACE:      // TC = 5 (Surface Position)
-                case MODE_S_SURFACE + 1:  // TC = 6 (Surface Position)
-                case MODE_S_SURFACE + 2:  // TC = 7 (Surface Position)
-                case MODE_S_SURFACE + 3:  // TC = 8 (Surface Position)
-
-                    break;
-
-                case MODE_S_POSITION_BARO:      // TC = 9 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 1:  // TC = 10 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 2:  // TC = 11 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 3:  // TC = 12 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 4:  // TC = 13 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 5:  // TC = 14 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 6:  // TC = 15 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 7:  // TC = 16 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 8:  // TC = 17 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_BARO + 9:  // TC = 18 (Airborne Position w/ Baro Altitude)
-                case MODE_S_POSITION_GNSS:      // TC = 20 (Airborne Position w/ GNSS Altitude)
-                case MODE_S_POSITION_GNSS + 1:  // TC = 21 (Airborne Position w/ GNSS Altitude)
-                case MODE_S_POSITION_GNSS + 2: { // TC = 22 (Airborne Position w/ GNSS Altitude)
-                    uint8_t tx_buf[20] = { 0 };
-                    tx_buf[0] = queue_rx_buf.packet_type;
-                    memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
-                    memcpy(&tx_buf[5], &aircraft_mode_s.latitude_deg, 4);
-                    memcpy(&tx_buf[9], &aircraft_mode_s.longitude_deg, 4);
-                    memcpy(&tx_buf[13], &aircraft_mode_s.baro_altitude_ft, 4);
-
-                    // TODO - Transmit GNSS Altitude if TC == 20 - 22
-                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
-                    break;
-                }
-
-                case MODE_S_VELOCITY: {  // TC = 19 (Airborne Velocities)
-                    uint8_t tx_buf[20] = { 0 };
-                    tx_buf[0] = queue_rx_buf.packet_type;
-                    memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
-                    memcpy(&tx_buf[5], &aircraft_mode_s.direction_deg, 4);
-                    memcpy(&tx_buf[9], &aircraft_mode_s.baro_vertical_rate_fpm, 4);
-                    memcpy(&tx_buf[13], &aircraft_mode_s.speed_kts, 4);
-                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
-                    break;
-                }
-
-                case MODE_S_RESERVED:      // TC = 23 (Reserved)
-                case MODE_S_RESERVED + 1:  // TC = 24 (Reserved)
-                case MODE_S_RESERVED + 2:  // TC = 25 (Reserved)
-                case MODE_S_RESERVED + 3:  // TC = 26 (Reserved)
-                case MODE_S_RESERVED + 4:  // TC = 27 (Reserved)
-
-                    break;
-
-                case MODE_S_AIRCRAFT_STATUS:  // TC = 28 (Aircraft Status)
-
-                    break;
-
-                case MODE_S_TARGET_STATE:  // TC = 29 (Target state and status info)
-
-                    break;
-
-                case MODE_S_OPERATION_STATUS:  // TC = 31 (Aircraft operation status)
-
-                    break;
-
-                
-
-                case UAT_IDENT: {
-                    uint8_t tx_buf[16] = { 0 };
-                    tx_buf[0] = queue_rx_buf.packet_type;
-                    memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
-                    memcpy(&tx_buf[5], &aircraft_uat.callsign, 8);
-                    tx_buf[13] = aircraft_uat.emitter_category;
-
-                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
-                    break;
-                }
-
-                case UAT_STATE_VECTOR:  {
-                    uint8_t tx_buf[30] = { 0 };
-                    tx_buf[0] = queue_rx_buf.packet_type;
-                    memcpy(&tx_buf[1], &queue_rx_buf.uid, 4);
-                    memcpy(&tx_buf[5], &aircraft_uat.latitude_deg, 4);
-                    memcpy(&tx_buf[9], &aircraft_uat.longitude_deg, 4);
-                    memcpy(&tx_buf[13], &aircraft_uat.baro_altitude_ft, 4);
-                    memcpy(&tx_buf[17], &aircraft_uat.direction_deg, 4);
-                    memcpy(&tx_buf[21], &aircraft_uat.baro_vertical_rate_fpm, 4);
-                    memcpy(&tx_buf[25], &aircraft_uat.speed_kts, 4);
-
-                    // TODO - Transmit GNSS Altitude if valid
-                    transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_32BYTE, &tx_buf[0]);
-                    break;
-                }
-                
-                case UAT_AUXILIARY_STATE_VECTOR:
-                    break;
-                case UAT_TARGET_STATE:
-                    break;
-                case UAT_TRAJECTORY_CHANGE:
-                    break;
-
-
-                default:
-                    CONSOLE_WARNING("CAN::IngestModeSADSBPacket",
-                                    "Received ADSB message with unsupported type code %d for UID 0x%lX.", queue_rx_buf.packet_type,
-                                    queue_rx_buf.uid);
-
-                }
-            }
-        }
-
-        // TODO - check canbus error status at 1hz
-        //check_can_errors();
-
-    }   // End of can loop
+    uint32_t now_ms = get_time_since_boot_ms();
+    if (now_ms - last_heartbeat >= kCANHeartbeatIntervalMs) {
+        send_heartbeat();
+    }
 }
 
+static void ReportCANModeSTraffic(uint32_t uid, uint8_t packet_type, const ModeSAircraft& aircraft) {
+    switch (packet_type) {
+        case MODE_S_IDENT:
+        case MODE_S_IDENT + 1:
+        case MODE_S_IDENT + 2:
+        case MODE_S_IDENT + 3: {
+            uint8_t tx_buf[16] = {0};
+            tx_buf[0] = packet_type;
+            memcpy(&tx_buf[1], &uid, 4);
+            memcpy(&tx_buf[5], &aircraft.callsign, 8);
+            tx_buf[13] = aircraft.emitter_category;
+            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+            break;
+        }
 
-bool CanbusInit(can_termination_t term_res_enable)   {
+        case MODE_S_SURFACE:
+        case MODE_S_SURFACE + 1:
+        case MODE_S_SURFACE + 2:
+        case MODE_S_SURFACE + 3:
+            break;
+
+        case MODE_S_POSITION_BARO:
+        case MODE_S_POSITION_BARO + 1:
+        case MODE_S_POSITION_BARO + 2:
+        case MODE_S_POSITION_BARO + 3:
+        case MODE_S_POSITION_BARO + 4:
+        case MODE_S_POSITION_BARO + 5:
+        case MODE_S_POSITION_BARO + 6:
+        case MODE_S_POSITION_BARO + 7:
+        case MODE_S_POSITION_BARO + 8:
+        case MODE_S_POSITION_BARO + 9:
+        case MODE_S_POSITION_GNSS:
+        case MODE_S_POSITION_GNSS + 1:
+        case MODE_S_POSITION_GNSS + 2: {
+            uint8_t tx_buf[20] = {0};
+            tx_buf[0] = packet_type;
+            memcpy(&tx_buf[1], &uid, 4);
+            memcpy(&tx_buf[5], &aircraft.latitude_deg, 4);
+            memcpy(&tx_buf[9], &aircraft.longitude_deg, 4);
+            memcpy(&tx_buf[13], &aircraft.baro_altitude_ft, 4);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
+            break;
+        }
+
+        case MODE_S_VELOCITY: {
+            uint8_t tx_buf[20] = {0};
+            tx_buf[0] = packet_type;
+            memcpy(&tx_buf[1], &uid, 4);
+            memcpy(&tx_buf[5], &aircraft.direction_deg, 4);
+            memcpy(&tx_buf[9], &aircraft.baro_vertical_rate_fpm, 4);
+            memcpy(&tx_buf[13], &aircraft.speed_kts, 4);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
+            break;
+        }
+
+        case MODE_S_RESERVED:
+        case MODE_S_RESERVED + 1:
+        case MODE_S_RESERVED + 2:
+        case MODE_S_RESERVED + 3:
+        case MODE_S_RESERVED + 4:
+        case MODE_S_AIRCRAFT_STATUS:
+        case MODE_S_TARGET_STATE:
+        case MODE_S_OPERATION_STATUS:
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void ReportCANUATTraffic(uint32_t uid, adsb_packet_type_t packet_type, const UATAircraft& aircraft) {
+    switch (packet_type) {
+        case UAT_IDENT: {
+            uint8_t tx_buf[16] = {0};
+            tx_buf[0] = packet_type;
+            memcpy(&tx_buf[1], &uid, 4);
+            memcpy(&tx_buf[5], &aircraft.callsign, 8);
+            tx_buf[13] = aircraft.emitter_category;
+            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+            break;
+        }
+
+        case UAT_STATE_VECTOR: {
+            uint8_t tx_buf[30] = {0};
+            tx_buf[0] = packet_type;
+            memcpy(&tx_buf[1], &uid, 4);
+            memcpy(&tx_buf[5], &aircraft.latitude_deg, 4);
+            memcpy(&tx_buf[9], &aircraft.longitude_deg, 4);
+            memcpy(&tx_buf[13], &aircraft.baro_altitude_ft, 4);
+            memcpy(&tx_buf[17], &aircraft.direction_deg, 4);
+            memcpy(&tx_buf[21], &aircraft.baro_vertical_rate_fpm, 4);
+            memcpy(&tx_buf[25], &aircraft.speed_kts, 4);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_32BYTE, &tx_buf[0]);
+            break;
+        }
+
+        case UAT_AUXILIARY_STATE_VECTOR:
+        case UAT_TARGET_STATE:
+        case UAT_TRAJECTORY_CHANGE:
+            break;
+
+        default:
+            break;
+    }
+}
+
+void ReportCANFromIngestedModeSPacket(const DecodedModeSPacket& decoded_packet) {
+    if (!canbus_initialized || !efis_connected) {
+        return;
+    }
+    if (decoded_packet.raw.buffer_len_bytes != RawModeSPacket::kExtendedSquitterPacketLenBytes) {
+        return;
+    }
+
+    ModeSADSBPacket ads_b_packet(decoded_packet);
+    if (!ads_b_packet.is_valid) {
+        return;
+    }
+
+    switch (ads_b_packet.downlink_format) {
+        case ModeSADSBPacket::kDownlinkFormatExtendedSquitter:
+        case ModeSADSBPacket::kDownlinkFormatExtendedSquitterNonTransponder:
+            break;
+        default:
+            return;
+    }
+
+    if (ads_b_packet.type_code == ModeSADSBPacket::kTypeCodeInvalid) {
+        return;
+    }
+
+    uint32_t uid = Aircraft::ICAOToUID(ads_b_packet.icao_address, Aircraft::kAircraftTypeModeS);
+    ModeSAircraft aircraft;
+    if (!adsbee_server.aircraft_dictionary.GetAircraft(uid, aircraft)) {
+        return;
+    }
+
+    ReportCANModeSTraffic(uid, static_cast<uint8_t>(ads_b_packet.type_code), aircraft);
+}
+
+void ReportCANFromIngestedUATPacket(const DecodedUATADSBPacket& decoded_packet) {
+    if (!canbus_initialized || !efis_connected) {
+        return;
+    }
+
+    uint32_t uid = Aircraft::ICAOToUID(decoded_packet.GetICAOAddress(), Aircraft::kAircraftTypeUAT);
+    UATAircraft aircraft;
+    if (!adsbee_server.aircraft_dictionary.GetAircraft(uid, aircraft)) {
+        return;
+    }
+
+    if (decoded_packet.has_state_vector) {
+        ReportCANUATTraffic(uid, UAT_STATE_VECTOR, aircraft);
+    }
+    if (decoded_packet.has_mode_status) {
+        ReportCANUATTraffic(uid, UAT_IDENT, aircraft);
+    }
+}
+
+bool CanbusInit(can_termination_t term_res_enable) {
     CONSOLE_INFO("CAN_INIT", "Initializing MCP251863...");
 
     // Configure selectable termination resistor GPIO control
@@ -424,11 +444,8 @@ bool CanbusInit(can_termination_t term_res_enable)   {
     } */
 
 
-    CAN_msg_tx_queue = xQueueCreate(100, sizeof(queue_msg_t));
-    
-
     vTaskDelay(pdMS_TO_TICKS(5));
-    
+
     // Initialize MCP251XFD device with CAN-FD configuration
     // Note: SPI bus initialization is handled by MCP251XFD_SPI_Init callback
     MCP251XFD_Config mcp_config = {
@@ -524,8 +541,9 @@ bool CanbusInit(can_termination_t term_res_enable)   {
         return false;
     }
 
-    //gpio_isr_handler_add(CAN_RX_INT_PIN, CANRX_isr_handler, NULL);
-
+    canbus_initialized = true;
+    last_heartbeat = 0;  // Force first CanbusUpdate() to send heartbeat / UID request.
+    CONSOLE_INFO("CAN_INIT", "MCP251863 ready");
     return true;
 }
 
@@ -577,18 +595,15 @@ eERRORRESULT MCP251XFD_SPI_Init(void *pIntDev, uint8_t chipSelect, const uint32_
         can_spi_handle = NULL;
     }
     
-    // Initialize SPI bus if not already initialized
+    // Initialize SPI bus if not already initialized (e.g. by W5500 Ethernet on the same aux bus).
     if (can_spi_handle == NULL) {
-        ret = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
-        if (ret == ESP_ERR_INVALID_STATE) {
-            // Bus already initialized
-        } else if (ret != ESP_OK) {
+        ret = spi_bus_initialize(CAN_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
             CONSOLE_ERROR("CAN_INIT", "Failed to initialize SPI bus: %s", esp_err_to_name(ret));
             return ERR__SPI_FREQUENCY_ERROR;
         }
-        
-        // Add device to SPI bus
-        ret = spi_bus_add_device(SPI3_HOST, &devcfg, &can_spi_handle);
+
+        ret = spi_bus_add_device(CAN_SPI_HOST, &devcfg, &can_spi_handle);
         if (ret != ESP_OK) {
             CONSOLE_ERROR("CAN_INIT", "Failed to add SPI device: %s", esp_err_to_name(ret));
             return ERR__SPI_FREQUENCY_ERROR;
@@ -611,13 +626,21 @@ eERRORRESULT MCP251XFD_SPI_Transfer(void *pIntDev, uint8_t chipSelect, uint8_t *
         CONSOLE_ERROR("CAN_INIT", "SPI transfer: txData is NULL");
         return ERR__SPI_PARAMETER_ERROR;
     }
-    
+
+    if (size == 0 || size > sizeof(s_can_spi_dma_buf)) {
+        CONSOLE_ERROR("CAN_INIT", "SPI transfer size %u out of range (max %u)", (unsigned)size,
+                      (unsigned)sizeof(s_can_spi_dma_buf));
+        return ERR__SPI_PARAMETER_ERROR;
+    }
+
+    memcpy(s_can_spi_dma_buf, txData, size);
+
     // ESP-IDF SPI driver handles CS automatically based on devcfg.spics_io_num
     // The chipSelect parameter from MCP251XFD is ignored since we use fixed CS pin
     spi_transaction_t trans = {
         .length = size * 8,  // Length in bits
-        .tx_buffer = txData,
-        .rx_buffer = rxData,
+        .tx_buffer = s_can_spi_dma_buf,
+        .rx_buffer = s_can_spi_dma_buf,
     };
     
     esp_err_t ret = spi_device_transmit(can_spi_handle, &trans);
@@ -625,6 +648,9 @@ eERRORRESULT MCP251XFD_SPI_Transfer(void *pIntDev, uint8_t chipSelect, uint8_t *
         CONSOLE_ERROR("CAN_INIT", "SPI transfer failed: %s", esp_err_to_name(ret));
         return ERR__SPI_FREQUENCY_ERROR;
     }
+
+    uint8_t *readback = rxData != nullptr ? rxData : txData;
+    memcpy(readback, s_can_spi_dma_buf, size);
     
     return ERR_OK;
 }

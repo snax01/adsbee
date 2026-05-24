@@ -68,6 +68,7 @@ class SettingsManager {
             kPositionSourceGNSS = 2,
             kPositionSourceLowestAircraft = 3,
             kPositionSourceAircraftMatchingICAO = 4,
+            kPositionSourceRADbus = 5,  // ESP32: ownship from connected EFIS over RADbus CAN.
             kNumPositionSources
         };
 

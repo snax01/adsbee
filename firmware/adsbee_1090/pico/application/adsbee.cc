@@ -295,6 +295,10 @@ void ADSBee::UpdateRxPosition() {
             // Fixed position is always available.
             rx_position_available = true;
             break;
+        case SettingsManager::RxPosition::PositionSource::kPositionSourceRADbus:
+            // RADbus ownship is provided by the ESP32 over CAN, not the RP2040.
+            rx_position_available = false;
+            break;
         case SettingsManager::RxPosition::PositionSource::kPositionSourceAircraftMatchingICAO: {
             // Try to find the aircraft with the matching ICAO address in the dictionary.
             // Check both Mode S and UAT, and use the most recently seen aircraft if both exist.
