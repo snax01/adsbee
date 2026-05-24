@@ -53,6 +53,8 @@ idf_component_register(
     EMBED_TXTFILES
         "server/web/index.html"
         "server/web/style.css"
+        "server/web/pro.html"
+        "server/web/pro.css"
         "server/web/favicon.png"
 )
 

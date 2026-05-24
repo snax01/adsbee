@@ -1,162 +1,27 @@
-.page-container {
-    display: flex;
-    flex-direction: column;
-    /* Ensures a vertical column layout */
+/* Layout */
+body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #858585;
+}
+
+.page {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 2rem;
 }
 
 .column-element {
     margin: 0.5rem 0;
-    /* Optional: Adds space between the divs */
 }
 
-/* Terminal styling */
-#terminal {
-    /* Keep width just below 100% to avoid horizontal scroll bar. */
-    width: 98%;
-    height: 400px;
-    background: black;
-    color: #ffffff;
-    font-family: 'Courier New', monospace;
-    padding: 10px;
-    overflow-y: scroll;
-    position: relative;
-    cursor: text;
-}
-
-#terminal-content {
-    white-space: pre-wrap;
-    word-wrap: break-word;
-}
-
-#cursor {
-    display: inline-block;
-    background: #ffffff;
-    animation: blink 1s step-end infinite;
-    color: #000000;
-    min-width: 0.6em;
-    min-height: 1.2em;
-    vertical-align: middle;
-}
-
-#cursor:before {
-    content: attr(data-char);
-    color: #000000;
-}
-
-@keyframes blink {
-
-    0%,
-    50% {
-        background: #ffffff;
-        color: #000000;
-    }
-
-    51%,
-    100% {
-        background: #000000;
-        color: #ffffff;
-    }
-}
-
-.input-line {
-    display: flex;
-    align-items: center;
-}
-
-.prompt {
-    color: #ffffff;
-    margin-right: 8px;
-}
-
-.hidden-input {
-    position: absolute;
-    opacity: 0;
-    height: 0;
-    width: 0;
-}
-
-.metrics {
-    display: block;
-    flex-wrap: wrap;
-    border-radius: 8px;
-    font-family: Arial;
-}
-
-.metrics-card {
-    background: white;
-    margin: 1rem;
-    padding: 1rem;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    display: inline-block;
-}
-
-.metrics-title {
-    color: #64748b;
-    font-size: 0.875rem;
-    margin-bottom: 0.5rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.metrics-header {
-    font-family: Arial;
-    padding: 1rem;
-    padding-bottom: 0;
-    font-weight: bold;
-}
-
-.metrics-value {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: #0f172a;
-}
-
-.device-status {
-    text-align: left;
-    display: block;
-}
-
-.device-status-cards {
-    display: flex;
-    flex-wrap: wrap;
-}
-
-.device-card {
-    background: white;
-    margin: 1rem;
-    padding: 1rem;
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-    display: inline-block;
-    min-width: 200px;
-}
-
-.sparkline {
-    margin-top: 0.5rem;
-    height: 30px;
-}
-
-.sparkline path {
-    stroke: #ffcb00;
-    stroke-width: 2;
-    fill: none;
-}
-
-.sparkline path.area {
-    fill: #ffdd54;
-    opacity: 0.5;
-}
-
+/* Connection status (metrics WebSocket) */
 .connection-status {
-    /* position: fixed;
-    top: 1rem;
-    right: 1rem; */
     padding: 0.5rem 1rem;
-    border-radius: 4px;
+    border-radius: 6px;
     font-size: 0.875rem;
-    font-family: Arial;
+    margin-bottom: 1rem;
 }
 
 .connection-status.connected {
@@ -169,45 +34,145 @@
     color: #991b1b;
 }
 
-.labels-count {
-    /* position: fixed;
-    top: 1rem;
-    left: 1rem; */
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+/* Wi‑Fi AP fields (between status and tools) */
+.wifi-settings {
+    width: 100%;
+    max-width: 420px;
+    margin: 0 auto 1rem;
+    padding: 0.75rem 1rem;
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.wifi-settings-heading {
+    margin: 0 0 0.5rem;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: #0f172a;
+    letter-spacing: 0.02em;
+}
+
+.wifi-settings-intro {
+    margin: 0 0 1rem;
     font-size: 0.875rem;
-    background: #f1f5f9;
+    line-height: 1.45;
     color: #475569;
 }
 
-/* Upload button styling */
-.tools-container {
-    max-width: 100%;
-    margin: 20px auto;
-    font-family: Arial, sans-serif;
+.wifi-field-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.65rem;
+}
+
+.wifi-save-row {
     display: flex;
     justify-content: center;
+    margin-top: 0.35rem;
+    margin-bottom: 0.35rem;
+}
+
+.wifi-save-row .tools-button {
+    width: 100%;
+    max-width: 220px;
+    margin: 6px 0;
+}
+
+.wifi-field-row label {
+    flex: 0 0 5.5rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: #334155;
+}
+
+.password-input-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
     align-items: center;
+    gap: 0.45rem;
+}
+
+.wifi-field-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.95rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
+.password-toggle {
+    width: 2.2rem;
+    height: 2.2rem;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #f8fafc;
+    cursor: pointer;
+    line-height: 1;
+    font-size: 1rem;
+}
+
+.password-toggle:hover {
+    background: #f1f5f9;
+}
+
+.wifi-field-row input:focus,
+.password-toggle:focus {
+    outline: none;
+    border-color: #94a3b8;
+    background: #fff;
+}
+
+.wifi-validation-error {
+    margin: 0.5rem 0 0;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.85rem;
+    line-height: 1.35;
+    color: #991b1b;
+    background: #fee2e2;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+}
+
+/* Tools: firmware + settings */
+/* Hidden temporarily: download/restore settings. To show again: delete this rule or set to display: contents */
+.settings-backup-tools {
+    display: none;
+}
+
+.tools-container {
+    max-width: 100%;
+    margin: 0 auto;
+    display: flex;
     flex-direction: column;
+    align-items: center;
 }
 
 .tools-container .button-row {
     width: 100%;
-    justify-content: center;
     display: flex;
-    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
 }
 
 .tools-button {
-    width: 100%;
-    padding: 12px;
-    margin: 12px;
+    flex: 1 1 160px;
     max-width: 200px;
-    background-color: #ffcb00;
-    color: black;
+    padding: 12px;
+    margin: 6px;
+    background-color: #003f5b;
+    color: #d6d6d6;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 600;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -215,7 +180,8 @@
 }
 
 .tools-button:disabled {
-    background-color: #ccc;
+    background-color: #cbd5e1;
+    color: #64748b;
     cursor: not-allowed;
 }
 
@@ -229,16 +195,26 @@
 
 .progress-bar {
     min-width: 200px;
-    margin: auto 15%;
+    margin: auto 10%;
     height: 20px;
-    background-color: #f0f0f0;
+    background-color: #e2e8f0;
     border-radius: 4px;
     overflow: hidden;
 }
 
 .progress-fill {
     height: 100%;
-    background-color: #ffcb00;
+    background: linear-gradient(
+        90deg,
+        #003f5b,
+        #2b4b7d,
+        #5f5195,
+        #98509d,
+        #cc4c91,
+        #f25375,
+        #ff6f4e,
+        #ff9913
+    );
     width: 0%;
     transition: width 0.3s ease;
 }
@@ -247,14 +223,16 @@
     text-align: center;
     margin-top: 8px;
     font-size: 14px;
-    color: #666;
+    color: #252525;
 }
 
 .alert {
     margin-top: 16px;
     padding: 12px;
-    border-radius: 4px;
+    border-radius: 6px;
     display: none;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .alert.success {
@@ -279,8 +257,76 @@
     display: inline-block;
     width: 16px;
     height: 16px;
-    border: 2px solid #fff;
+    border: 2px solid #0f172a;
     border-radius: 50%;
     border-top-color: transparent;
     animation: spin 1s linear infinite;
+}
+
+/* Off-screen console: keeps WebSocket + terminal JS functional for future AT+ UI */
+.console-backend-hidden {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+}
+
+#terminal {
+    width: 400px;
+    height: 200px;
+    background: #000;
+    color: #fff;
+    font-family: 'Courier New', monospace;
+    padding: 8px;
+    overflow-y: auto;
+    position: relative;
+}
+
+#terminal-content {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+#cursor {
+    display: inline-block;
+    background: #fff;
+    animation: blink 1s step-end infinite;
+    color: #000;
+    min-width: 0.6em;
+    min-height: 1.2em;
+    vertical-align: middle;
+}
+
+@keyframes blink {
+    0%,
+    50% {
+        background: #fff;
+        color: #000;
+    }
+
+    51%,
+    100% {
+        background: #000;
+        color: #fff;
+    }
+}
+
+.input-line {
+    display: flex;
+    align-items: center;
+}
+
+.prompt {
+    color: #fff;
+    margin-right: 8px;
+}
+
+.hidden-input {
+    position: absolute;
+    opacity: 0;
+    height: 0;
+    width: 0;
 }

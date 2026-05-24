@@ -18,7 +18,7 @@ static const uint16_t kNetworkConsoleWelcomeMessageMaxLen = 1000;
 static const uint16_t kNetworkMetricsMessageMaxLen = 1500;
 
 /* obsolete */
-static const uint16_t kNetworkControlPort = 3333;  // NOTE: This must match the port number used in index.html!
+static const uint16_t kNetworkControlPort = 3333;  // NOTE: This must match the port number used in pro.html!
 
 // TCP Server socket options
 static const int kTCPServerSockOptReuseAddr = true;  // Enable TCP server to reuse socket addresses.
@@ -38,6 +38,10 @@ extern const uint8_t index_html_start[] asm("_binary_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_index_html_end");
 extern const uint8_t style_css_start[] asm("_binary_style_css_start");
 extern const uint8_t style_css_end[] asm("_binary_style_css_end");
+extern const uint8_t pro_html_start[] asm("_binary_pro_html_start");
+extern const uint8_t pro_html_end[] asm("_binary_pro_html_end");
+extern const uint8_t pro_css_start[] asm("_binary_pro_css_start");
+extern const uint8_t pro_css_end[] asm("_binary_pro_css_end");
 extern const uint8_t favicon_png_start[] asm("_binary_favicon_png_start");
 extern const uint8_t favicon_png_end[] asm("_binary_favicon_png_end");
 
@@ -466,17 +470,32 @@ bool ADSBeeServer::ReportGDL90UplinkDataMessage(const DecodedUATUplinkPacket& up
 // }
 
 static esp_err_t root_handler(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char*)index_html_start, index_html_end - index_html_start);
     return ESP_OK;
 }
 
 static esp_err_t css_handler(httpd_req_t* req) {
-    // Set the CSS content type
     httpd_resp_set_type(req, "text/css");
-
-    // Send the CSS file
     httpd_resp_send(req, (const char*)style_css_start, style_css_end - style_css_start);
+    return ESP_OK;
+}
 
+static esp_err_t index_html_handler(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, (const char*)index_html_start, index_html_end - index_html_start);
+    return ESP_OK;
+}
+
+static esp_err_t pro_html_handler(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, (const char*)pro_html_start, pro_html_end - pro_html_start);
+    return ESP_OK;
+}
+
+static esp_err_t pro_css_handler(httpd_req_t* req) {
+    httpd_resp_set_type(req, "text/css");
+    httpd_resp_send(req, (const char*)pro_css_start, pro_css_end - pro_css_start);
     return ESP_OK;
 }
 
@@ -655,6 +674,33 @@ bool ADSBeeServer::TCPServerInit() {
                        .handle_ws_control_frames = false,
                        .supported_subprotocol = nullptr};
     ESP_ERROR_CHECK(httpd_register_uri_handler(server, &css));
+
+    httpd_uri_t index_html = {.uri = "/index.html",
+                              .method = HTTP_GET,
+                              .handler = index_html_handler,
+                              .user_ctx = NULL,
+                              .is_websocket = false,
+                              .handle_ws_control_frames = false,
+                              .supported_subprotocol = nullptr};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &index_html));
+
+    httpd_uri_t pro_html = {.uri = "/pro.html",
+                            .method = HTTP_GET,
+                            .handler = pro_html_handler,
+                            .user_ctx = NULL,
+                            .is_websocket = false,
+                            .handle_ws_control_frames = false,
+                            .supported_subprotocol = nullptr};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pro_html));
+
+    httpd_uri_t pro_css = {.uri = "/pro.css",
+                           .method = HTTP_GET,
+                           .handler = pro_css_handler,
+                           .user_ctx = NULL,
+                           .is_websocket = false,
+                           .handle_ws_control_frames = false,
+                           .supported_subprotocol = nullptr};
+    ESP_ERROR_CHECK(httpd_register_uri_handler(server, &pro_css));
 
     // Favicon URI handler
     httpd_uri_t favicon = {.uri = "/favicon.png",

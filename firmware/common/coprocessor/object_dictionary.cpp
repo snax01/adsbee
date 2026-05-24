@@ -19,9 +19,9 @@
 
 const uint8_t ObjectDictionary::kFirmwareVersionMajor = 0;
 const uint8_t ObjectDictionary::kFirmwareVersionMinor = 8;
-const uint8_t ObjectDictionary::kFirmwareVersionPatch = 0;
+const uint8_t ObjectDictionary::kFirmwareVersionPatch = 1;
 // NOTE: Indicate a final release with RC = 0.
-const uint8_t ObjectDictionary::kFirmwareVersionReleaseCandidate = 21;
+const uint8_t ObjectDictionary::kFirmwareVersionReleaseCandidate = 0;
 
 const uint32_t ObjectDictionary::kFirmwareVersion = (kFirmwareVersionMajor << 24) | (kFirmwareVersionMinor << 16) |
                                                     (kFirmwareVersionPatch << 8) | kFirmwareVersionReleaseCandidate;
