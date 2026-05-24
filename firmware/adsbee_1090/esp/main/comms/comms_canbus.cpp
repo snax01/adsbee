@@ -7,6 +7,7 @@
 #include "aircraft_dictionary.hh"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "hal.hh"
@@ -14,9 +15,7 @@
 
 extern GDL90Reporter gdl90;
 
-#define CAN_SPI_HOST SPI3_HOST
 
-static spi_device_handle_t  can_spi_handle = NULL;
 
 #define CAN_STANDBY_PIN     GPIO_NUM_12
 #define CAN_TERM_ENABLE     GPIO_NUM_21
@@ -24,6 +23,7 @@ static spi_device_handle_t  can_spi_handle = NULL;
 #define CAN_RX_INT_PIN      GPIO_NUM_47 // Msg received interrupt
 #define CAN_INT_PIN         GPIO_NUM_48 // General Interrupts from MCP251863
 
+#define CAN_SPI_HOST        SPI3_HOST
 #define SPI_MOSI_PIN        GPIO_NUM_14
 #define SPI_MISO_PIN        GPIO_NUM_13
 #define SPI_SCLK_PIN        GPIO_NUM_17
@@ -34,6 +34,8 @@ static spi_device_handle_t  can_spi_handle = NULL;
 // MCP251XFD SPI frames are small (see MCP251XFD_TRANS_BUF_SIZE). Keep this low to limit
 // SPI master DMA heap reserved at spi_bus_initialize() time on memory-tight builds.
 #define CAN_SPI_MAX_TRANSFER_BYTES 128
+
+static spi_device_handle_t  can_spi_handle = NULL;
 
 // Shared DMA staging buffer for MCP251XFD SPI (stack buffers are not cache/DMA-safe on ESP32-S3).
 alignas(64) static uint8_t s_can_spi_dma_buf[CAN_SPI_MAX_TRANSFER_BYTES];
@@ -55,13 +57,12 @@ MCP251XFD_CANMessage rx_message = {
 };
 
 // Buffer for transmit message data
-uint8_t tx_data[64] = {0};
 MCP251XFD_CANMessage tx_message = {
     .MessageID = 0x123,
     .MessageSEQ = 0,
     .ControlFlags = (setMCP251XFD_MessageCtrlFlags)(MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE),  // CAN-FD frame with BRS enabled
     .DLC = MCP251XFD_DLC_2BYTE,
-    .PayloadData = tx_data,
+    .PayloadData = NULL,
 };
 
 bool volatile efis_connected = false;
@@ -76,6 +77,13 @@ static SettingsManager::RxPosition radbus_rx_position = {};
 SettingsManager::RxPosition& GetRadbusRxPosition() { return radbus_rx_position; }
 
 static bool canbus_initialized = false;
+
+// Set from GPIO ISR when MCP251863 INT1 (active low) asserts; drained in CanbusUpdate().
+static volatile bool can_rx_pending = false;
+
+static void IRAM_ATTR can_rx_gpio_isr(void* /*arg*/) { 
+    can_rx_pending = true;
+}
 
 
 // MCP251XFD Device Configuration
@@ -132,6 +140,21 @@ static bool check_rx_fifo(void)
     return (st & MCP251XFD_RX_FIFO_NOT_EMPTY) != 0;
 }
 
+/** Discard any frames already in RX FIFO1 (noise / traffic before we are ready). */
+static void drain_rx_fifo(void)
+{
+    uint32_t ts;
+    while (check_rx_fifo()) {
+        (void)MCP251XFD_ReceiveMessageFromFIFO(
+            &MCP251XFD_Ext1,
+            &rx_message,
+            MCP251XFD_PAYLOAD_64BYTE,
+            &ts,
+            MCP251XFD_FIFO1);
+    }
+    can_rx_pending = false;
+}
+
 void process_rx_msg()   {
     uint32_t ts;
     eERRORRESULT e = MCP251XFD_ReceiveMessageFromFIFO(
@@ -180,7 +203,7 @@ void process_rx_msg()   {
                 RADbus_UID = rx_data[0];
                 efis_connected = true;
                 radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceRADbus;
-                CONSOLE_WARNING("RADbus", "UID assign received.");
+                CONSOLE_INFO("RADbus", "UID assigned %i.", RADbus_UID);
             }   else    {
                 CONSOLE_ERROR("RADbus", "RADbus reached max clients, no client ID given.");
                 // TODO - handle this.
@@ -197,6 +220,9 @@ void process_rx_msg()   {
                 gdl90.utc_timing_is_valid = false;
             }
         }
+
+        default:
+            return;
     }
 }
 
@@ -227,7 +253,8 @@ void CanbusUpdate() {
         return;
     }
 
-    if (gpio_get_level(CAN_RX_INT_PIN) == 0) {
+    if (can_rx_pending) {
+        can_rx_pending = false;
         while (check_rx_fifo()) {
             process_rx_msg();
         }
@@ -424,25 +451,15 @@ bool CanbusInit(can_termination_t term_res_enable) {
     // Drive standby pin LOW to activate device (XSTBY is active low)
     gpio_set_level(CAN_STANDBY_PIN, 0);
 
-    // Configure CAN RX Interrupt pin
+    // INT1 is active-low push-pull (no external pull). Idle high: ESP pull-up + MCP drives high.
     gpio_config_t can_rx_int = {
         .pin_bit_mask = (1ULL << CAN_RX_INT_PIN),
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_POSEDGE,
+        .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&can_rx_int);
-
-/*     esp_err_t ret = gpio_install_isr_service(0);
-    if (ret == ESP_ERR_INVALID_STATE) {
-        // ISR handler has been already installed so no issues
-        CONSOLE_INFO("Comms_canbus", "GPIO ISR handler has been already installed");
-    } else if (ret != ESP_OK) {
-        CONSOLE_ERROR("Comms_canbus", "GPIO ISR handler install failed");
-        return false;
-    } */
-
 
     vTaskDelay(pdMS_TO_TICKS(5));
 
@@ -509,35 +526,80 @@ bool CanbusInit(can_termination_t term_res_enable) {
         Ext1_FIFO1_RAMInfos.RAMStartAddress,
         Ext1_FIFO2_RAMInfos.RAMStartAddress);
     
-    // Configure filter list to accept all messages
-    MCP251XFD_Filter filter_list[] = {
+    // Hardware RX filter: only the four RADbus IDs handled in process_rx_msg().
+    MCP251XFD_Filter radbus_rx_filters[] = {
         {
             .Filter = MCP251XFD_FILTER0,
             .EnableFilter = true,
-            .Match = MCP251XFD_MATCH_SID_EID,
+            .Match = MCP251XFD_MATCH_ONLY_SID,
             .PointTo = MCP251XFD_FIFO1,
-            .AcceptanceID = MCP251XFD_ACCEPT_ALL_MESSAGES,
-            .AcceptanceMask = MCP251XFD_ACCEPT_ALL_MESSAGES,
+            .AcceptanceID = CANMSG_ADSB_OWNSHIP_STATE,
+            .AcceptanceMask = MCP251XFD_SID_Mask,
+            .ExtendedID = false,
+        },
+        {
+            .Filter = MCP251XFD_FILTER1,
+            .EnableFilter = true,
+            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .PointTo = MCP251XFD_FIFO1,
+            .AcceptanceID = CANMSG_ADSB_OWNSHIP_IDENT,
+            .AcceptanceMask = MCP251XFD_SID_Mask,
+            .ExtendedID = false,
+        },
+        {
+            .Filter = MCP251XFD_FILTER2,
+            .EnableFilter = true,
+            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .PointTo = MCP251XFD_FIFO1,
+            .AcceptanceID = CANMSG_UID_ASSIGN,
+            .AcceptanceMask = MCP251XFD_SID_Mask,
+            .ExtendedID = false,
+        },
+        {
+            .Filter = MCP251XFD_FILTER3,
+            .EnableFilter = true,
+            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .PointTo = MCP251XFD_FIFO1,
+            .AcceptanceID = CANMSG_DISCONNECT_CLIENT,
+            .AcceptanceMask = MCP251XFD_SID_Mask,
             .ExtendedID = false,
         },
     };
-    
+
     eERRORRESULT filter_result = MCP251XFD_ConfigureFilterList(
         &MCP251XFD_Ext1,
-        MCP251XFD_D_NET_FILTER_DISABLE,  // Disable DeviceNet filter
-        filter_list,
-        sizeof(filter_list) / sizeof(filter_list[0])
-    );
+        MCP251XFD_D_NET_FILTER_DISABLE,
+        radbus_rx_filters,
+        sizeof(radbus_rx_filters) / sizeof(radbus_rx_filters[0]));
     if (filter_result != ERR_OK) {
         CONSOLE_ERROR("CAN_INIT", "Failed to configure filter list: Error code %d", filter_result);
         return false;
     }
-    CONSOLE_INFO("CAN_INIT", "Filters configured");
+    CONSOLE_INFO("CAN_INIT", "RX filters: 0x%03X, 0x%03X, 0x%03X, 0x%03X",
+                 CANMSG_ADSB_OWNSHIP_STATE, CANMSG_ADSB_OWNSHIP_IDENT, CANMSG_UID_ASSIGN,
+                 CANMSG_DISCONNECT_CLIENT);
     
     // Start CAN bus in CAN-FD mode
     eERRORRESULT start_result = MCP251XFD_StartCANFD(&MCP251XFD_Ext1);
     if (start_result != ERR_OK) {
         CONSOLE_ERROR("CAN_INIT", "Failed to start CAN bus: Error code %d", start_result);
+        return false;
+    }
+
+    drain_rx_fifo();
+
+    esp_err_t isr_ret = gpio_install_isr_service(0);
+    if (isr_ret == ESP_ERR_INVALID_STATE) {
+        // Already installed (e.g. by EthernetInit on the shared aux SPI bus).
+    } else if (isr_ret != ESP_OK) {
+        CONSOLE_ERROR("CAN_INIT", "GPIO ISR service install failed: %s", esp_err_to_name(isr_ret));
+        return false;
+    }
+
+    gpio_set_intr_type(CAN_RX_INT_PIN, GPIO_INTR_NEGEDGE);
+    isr_ret = gpio_isr_handler_add(CAN_RX_INT_PIN, can_rx_gpio_isr, nullptr);
+    if (isr_ret != ESP_OK) {
+        CONSOLE_ERROR("CAN_INIT", "GPIO ISR handler add failed: %s", esp_err_to_name(isr_ret));
         return false;
     }
 
