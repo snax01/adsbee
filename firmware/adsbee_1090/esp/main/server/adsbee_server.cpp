@@ -721,6 +721,9 @@ bool ADSBeeServer::TCPServerInit() {
     config.stack_size = kHTTPServerStackSizeBytes;
     // config.task_caps = MALLOC_CAP_IRAM_8BIT;
     config.max_open_sockets = 16;  // Must be <= CONFIG_LWIP_MAX_SOCKETS - 3 (currently 20 - 3 = 17).
+    // Default is 8; we register 8 HTTP + 3 WebSocket handlers (/, css, index, pro, pro.css, adsbee.js, favicon, feed API,
+    // console, metrics, aircraft).
+    config.max_uri_handlers = 12;
     config.close_fn = ws_close_fd;
     config.lru_purge_enable =
         true;  // Allow purging of the least recently used connections when max clients is reached.
