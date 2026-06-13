@@ -180,7 +180,6 @@ void process_rx_msg()   {
                 gdl90.utc_timing_is_valid = true;
                 gdl90.gnss_position_valid = true;
             }
-            CONSOLE_INFO("RADbus", "STATE ownship received.");
             break;
         }
 
@@ -194,7 +193,6 @@ void process_rx_msg()   {
             memcpy(&gdl90.ownship_data.navigation_integrity_category, &rx_data[14], 1);
             memcpy(&gdl90.ownship_data.navigation_accuracy_category_position, &rx_data[15], 1);
             memcpy(&gdl90.ownship_data.misc_indicators, &rx_data[16], 1);
-            CONSOLE_INFO("RADbus", "IDENT ownship received.");
             break;
         }
 
@@ -467,7 +465,7 @@ bool CanbusInit(can_termination_t term_res_enable) {
     // Note: SPI bus initialization is handled by MCP251XFD_SPI_Init callback
     MCP251XFD_Config mcp_config = {
         // Controller clocks
-        .XtalFreq = 20000000,  // 40MHz crystal // TODO - Change to 40MHz crystal and update this in v2
+        .XtalFreq = 40000000,  // 40MHz crystal // TODO - Change to 40MHz crystal and update this in v2
         .OscFreq = 0,          // Not using external oscillator
         .SysclkConfig = MCP251XFD_SYSCLK_IS_CLKIN,  // SYSCLK = CLKIN (no PLL) = 40MHz
         .ClkoPinConfig = MCP251XFD_CLKO_DivBy10,

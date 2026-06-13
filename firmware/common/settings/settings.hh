@@ -75,7 +75,7 @@ class SettingsManager {
         static const uint16_t kPositionSourceStrMaxLen = 32;
         static const char kPositionSourceStrs[kNumPositionSources][kPositionSourceStrMaxLen];
 
-        PositionSource source = kPositionSourceLowestAircraft;
+        PositionSource source = kPositionSourceNone;
         float latitude_deg = 0.0;      // Degrees, WGS84
         float longitude_deg = 0.0;     // Degrees, WGS84
         int32_t gnss_altitude_ft = 0;  // Meters, WGS84
@@ -141,7 +141,7 @@ class SettingsManager {
                 memset(wifi_sta_ssid, '\0', sizeof(wifi_sta_ssid));
                 memset(wifi_sta_password, '\0', sizeof(wifi_sta_password));
 
-                strncpy(hostname, "ADSBee1090",
+                strncpy(hostname, "RADaero",
                         sizeof(hostname));  // Default hostname, will be overridden when DeviceInfo is set.
             }
 
@@ -220,7 +220,7 @@ class SettingsManager {
                 device_info.GetDefaultSSID(core_network_settings.wifi_ap_ssid);
                 // Reuse the WiFi SSID as the hostname.
                 strncpy(core_network_settings.hostname, core_network_settings.wifi_ap_ssid, 32);
-                snprintf(core_network_settings.wifi_ap_password, kWiFiPasswordMaxLen, "yummyflowers");
+                snprintf(core_network_settings.wifi_ap_password, kWiFiPasswordMaxLen, "fishfinder");
             }
 
             core_network_settings.wifi_ap_channel =
@@ -246,25 +246,25 @@ class SettingsManager {
             strncpy(feed_uris[kMaxNumFeeds - 1], "feed.adsb.fi", kFeedURIMaxNumChars);
             feed_uris[kMaxNumFeeds - 1][kFeedURIMaxNumChars] = '\0';
             feed_ports[kMaxNumFeeds - 1] = 30004;
-            feed_is_active[kMaxNumFeeds - 1] = true;
+            feed_is_active[kMaxNumFeeds - 1] = false;
             feed_protocols[kMaxNumFeeds - 1] = kBeastNoUAT;
             // airplanes.live: feed.airplanes.live:30004, Beast
             strncpy(feed_uris[kMaxNumFeeds - 2], "feed.airplanes.live", kFeedURIMaxNumChars);
             feed_uris[kMaxNumFeeds - 2][kFeedURIMaxNumChars] = '\0';
             feed_ports[kMaxNumFeeds - 2] = 30004;
-            feed_is_active[kMaxNumFeeds - 2] = true;
+            feed_is_active[kMaxNumFeeds - 2] = false;
             feed_protocols[kMaxNumFeeds - 2] = kBeastNoUAT;
             // adsb.lol: feed.adsb.lol:30004, Beast
             strncpy(feed_uris[kMaxNumFeeds - 3], "feed.adsb.lol", kFeedURIMaxNumChars);
             feed_uris[kMaxNumFeeds - 3][kFeedURIMaxNumChars] = '\0';
             feed_ports[kMaxNumFeeds - 3] = 30004;
-            feed_is_active[kMaxNumFeeds - 3] = true;
+            feed_is_active[kMaxNumFeeds - 3] = false;
             feed_protocols[kMaxNumFeeds - 3] = kBeastNoUAT;
             // whereplane.xyz: feed.whereplane.xyz:30004, Beast
             strncpy(feed_uris[kMaxNumFeeds - 4], "feed.whereplane.xyz", kFeedURIMaxNumChars);
             feed_uris[kMaxNumFeeds - 4][kFeedURIMaxNumChars] = '\0';
             feed_ports[kMaxNumFeeds - 4] = 30004;
-            feed_is_active[kMaxNumFeeds - 4] = true;
+            feed_is_active[kMaxNumFeeds - 4] = false;
             feed_protocols[kMaxNumFeeds - 4] = kBeast;
         }
     };
@@ -308,7 +308,7 @@ class SettingsManager {
             }
         }
 
-        static constexpr uint16_t kDefaultSSIDLenChars = 24;  // ADSBee1090-YYYMMDDVVXXXX
+        static constexpr uint16_t kDefaultSSIDLenChars = 14;  // RADaero-VVXXXX
         /**
          * Writes a default value for a network SSID to a buffer. The buffer must be at least kDefaultSSIDLenChars+1 so
          * that there is space for an end of string character. This default network SSID value is intended to not
@@ -316,9 +316,8 @@ class SettingsManager {
          * @param[out] buf Buffer to write the network SSID to.
          */
         void GetDefaultSSID(char* buf) {
-            memcpy(buf, "ADSBee1090-", 11);       // [0:10] ADSBee1090-
-            memcpy(buf + 11, part_code + 12, 7);  // [11:17] YYYMMDD
-            memcpy(buf + 18, part_code + 20, 6);  // [18:23] VVXXXX
+            memcpy(buf, "RADaero-", 8);       // [0:7] ADSBee1090-
+            memcpy(buf + 8, part_code + 20, 6);  // [18:23] VVXXXX
             buf[kDefaultSSIDLenChars] = '\0';
         }
 

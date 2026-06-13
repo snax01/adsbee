@@ -17,9 +17,7 @@
 #include "cpu_utils.hh"
 #include "driver/gpio.h"
 #include "driver/spi_slave.h"
-#include "esp_cpu_utils.h"
-#include "esp_debug_helpers.h"
-#include "esp_heap_caps.h"
+#include "esp_debug_helpers.h"  // For esp_backtrace_print
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -45,86 +43,19 @@ SettingsManager settings_manager = SettingsManager();
 CommsManager comms_manager = CommsManager({});
 CPUMonitor cpu_monitor = CPUMonitor({});
 
-namespace {
-
-constexpr int kAllocFailBacktraceDepth = 12;
-
-void AppendHeapCapFlag(char* buf, size_t buf_len, uint32_t caps, uint32_t flag, const char* name) {
-    if ((caps & flag) == 0) {
-        return;
-    }
-    const size_t used = strnlen(buf, buf_len);
-    if (used >= buf_len - 1) {
-        return;
-    }
-    snprintf(buf + used, buf_len - used, "%s%s", used > 0 ? "|" : "", name);
-}
-
-void FormatHeapCapFlags(uint32_t caps, char* buf, size_t buf_len) {
-    buf[0] = '\0';
-    static const struct {
-        uint32_t flag;
-        const char* name;
-    } kCapNames[] = {
-        {MALLOC_CAP_EXEC, "EXEC"},         {MALLOC_CAP_32BIT, "32BIT"},   {MALLOC_CAP_8BIT, "8BIT"},
-        {MALLOC_CAP_DMA, "DMA"},           {MALLOC_CAP_SPIRAM, "SPIRAM"}, {MALLOC_CAP_INTERNAL, "INTERNAL"},
-        {MALLOC_CAP_DEFAULT, "DEFAULT"},   {MALLOC_CAP_IRAM_8BIT, "IRAM_8"},
-        {MALLOC_CAP_CACHE_ALIGNED, "CACHE_AL"},
-    };
-    for (const auto& cap_name : kCapNames) {
-        AppendHeapCapFlag(buf, buf_len, caps, cap_name.flag, cap_name.name);
-    }
-    if (buf[0] == '\0') {
-        snprintf(buf, buf_len, "0x%lX", caps);
-    }
-}
-
-// Walk the current task stack and emit raw PCs on the coprocessor log path (Pico USB serial).
-// Decode offline, e.g. xtensa-esp32s3-elf-addr2line -pfiaC -e build/adsbee_esp.elf <PC>
-void LogAllocFailureBacktrace() {
-    esp_backtrace_frame_t frame = {0};
-    esp_backtrace_get_start(&frame.pc, &frame.sp, &frame.next_pc);
-
-    for (int depth = 0; depth < kAllocFailBacktraceDepth; ++depth) {
-        CONSOLE_ERROR("heap_bt", "#%d PC=0x%08lX SP=0x%08lX", depth,
-                      (unsigned long)esp_cpu_process_stack_pc(frame.pc), (unsigned long)frame.sp);
-        if (frame.next_pc == 0) {
-            break;
-        }
-        if (!esp_backtrace_get_next_frame(&frame)) {
-            CONSOLE_ERROR("heap_bt", "backtrace corrupted at frame #%d", depth);
-            break;
-        }
-    }
-}
-
-}  // namespace
-
 void heap_caps_alloc_failed_hook(size_t requested_size, uint32_t caps, const char* function_name) {
-    char caps_str[64];
-    FormatHeapCapFlags(caps, caps_str, sizeof(caps_str));
-
-    const char* task_name = pcTaskGetName(NULL);
-    if (task_name == NULL) {
-        task_name = "unknown";
-    }
-
-    // function_name is the heap API entry (e.g. heap_caps_malloc), not the application caller.
     CONSOLE_ERROR("heap_caps_alloc_failed_hook",
-                  "alloc fail: %s size=%u caps=0x%lX (%s) uptime=%lu ms task=%s",
-                  function_name, (unsigned)requested_size, caps, caps_str, (unsigned long)get_time_since_boot_ms(),
-                  task_name);
-    // Match web metrics (MALLOC_CAP_8BIT) vs the caps that actually failed.
-    CONSOLE_ERROR("heap_caps_alloc_failed_hook",
-                  "8bit: free=%u largest=%u | need-caps: free=%u largest=%u",
-                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-                  (unsigned)heap_caps_get_free_size(caps), (unsigned)heap_caps_get_largest_free_block(caps));
-    CONSOLE_ERROR("heap_caps_alloc_failed_hook", "dma-pool free=%u iram free=%u",
-                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
-                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT));
-
-    LogAllocFailureBacktrace();
+                  "%s was called but failed to allocate %d bytes with 0x%lX capabilities.\r\n"
+                  "\tfree heap: %d bytes\r\n"
+                  "\tlargest free block: %d bytes\r\n"
+                  "\tDRAM: %d bytes\r\n"
+                  "\tIRAM: %d bytes\r\n",
+                  function_name, requested_size, caps, heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                  heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                  heap_caps_get_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+                  heap_caps_get_free_size(MALLOC_CAP_IRAM_8BIT));
+    printf("Stack trace at allocation failure:\n");
+    esp_backtrace_print(20);  // Print up to 20 stack frames
 }
 
 void device_status_update_task(void* pvParameters) {
