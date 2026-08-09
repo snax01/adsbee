@@ -1,6 +1,7 @@
 #include "settings.hh"
 
 #include "comms.hh"
+#include "comms_canbus.hh"
 
 bool SettingsManager::Apply() {
     bool ethernet_restart_required = false;
@@ -81,5 +82,10 @@ bool SettingsManager::Apply() {
             return false;
         }
     }
+
+    if (CanbusIsInitialized()) {
+        CanbusSetTermination(settings.can_termination_enabled ? CAN_TERM_ON : CAN_TERM_OFF);
+    }
+
     return true;
 }

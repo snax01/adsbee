@@ -8,7 +8,7 @@ TEST(Settings, DeviceInfoGetDefaultSSIDAndUID) {
 
     char ssid_buf[SettingsManager::Settings::kWiFiSSIDMaxLen];
     device_info.GetDefaultSSID(ssid_buf);
-    EXPECT_STREQ(ssid_buf, (const char*)"ADSBee1090-0240907986541");
+    EXPECT_STREQ(ssid_buf, (const char*)"RADaero-3C1E7A");
 
     uint8_t uid_buf[SettingsManager::Settings::kFeedReceiverIDNumBytes];
     device_info.GetDefaultFeedReceiverID(uid_buf);
@@ -22,6 +22,8 @@ TEST(Settings, DeviceInfoGetDefaultSSIDAndUID) {
     EXPECT_EQ(uid_buf[5], (uid_val >> (8 * 2)) & 0xFF);
     EXPECT_EQ(uid_buf[6], (uid_val >> (8 * 1)) & 0xFF);
     EXPECT_EQ(uid_buf[7], uid_val & 0xFF);
+
+    EXPECT_EQ(SettingsManager::DeviceInfo::FoldReceiverIdToUnique24(uid_buf), 0x3C1E7Au);
 }
 
 TEST(Settings, CoreNetworkSettings) {

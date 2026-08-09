@@ -1,10 +1,11 @@
-
 #include "comms.hh"
 
 #include "comms_canbus.hh"
+#include "can_export.h"
 #include "mcp251863/fifo_conf.h"
 #include "adsbee_server.hh"
 #include "aircraft_dictionary.hh"
+#include "device_info.hh"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_attr.h"
@@ -29,26 +30,27 @@ extern GDL90Reporter gdl90;
 #define SPI_SCLK_PIN        GPIO_NUM_17
 #define SPI_CS_PIN          GPIO_NUM_18
 
-#define SPI_CLOCK           8000000    // 8 MHz (slowed down for 20MHz crystal)
+#define SPI_CLOCK           8000000    // 8 MHz - TODO test higher SPI clock rates
 
 // MCP251XFD SPI frames are small (see MCP251XFD_TRANS_BUF_SIZE). Keep this low to limit
 // SPI master DMA heap reserved at spi_bus_initialize() time on memory-tight builds.
 #define CAN_SPI_MAX_TRANSFER_BYTES 128
 
+/* Local-only UID sentinels (never assigned on the bus). Matches EFIS radbus.h. */
+static const uint8_t kRadbusUidUnassigned = 0xFE;
+static const uint8_t kClientAddErrorCode = 0x99;
+
+/* Ephemeral src range for unassigned TX (arbitration uniqueness). */
+static const uint8_t kProvisionalSrcMin = 0x80;
+static const uint8_t kProvisionalSrcMax = 0xFD;
+
+/** Match only the 11-bit message type in a packed 29-bit extended ID. */
+static const uint32_t kCanMsgTypeFilterMask = CAN_MSG_MASK << CAN_MSG_SHIFT;
+
 static spi_device_handle_t  can_spi_handle = NULL;
 
 // Shared DMA staging buffer for MCP251XFD SPI (stack buffers are not cache/DMA-safe on ESP32-S3).
 alignas(64) static uint8_t s_can_spi_dma_buf[CAN_SPI_MAX_TRANSFER_BYTES];
-
-#define CANMSG_ADSB_AIRCRAFT_OUT    0x120
-#define CANMSG_ADSB_OWNSHIP_STATE   0x130
-#define CANMSG_ADSB_OWNSHIP_IDENT   0x140
-#define CANMSG_ADSB_WAKEUP          0x150
-
-#define CANMSG_HEARTBEAT            0x750
-#define CANMSG_UID_REQUEST          0x760
-#define CANMSG_UID_ASSIGN           0x770
-#define CANMSG_DISCONNECT_CLIENT    0x780
 
 // Buffer for received message data
 uint8_t rx_data[64];
@@ -56,19 +58,22 @@ MCP251XFD_CANMessage rx_message = {
     .PayloadData = rx_data,
 };
 
-// Buffer for transmit message data
+// Buffer for transmit message data — CAN-FD + BRS + extended 29-bit ID
 MCP251XFD_CANMessage tx_message = {
-    .MessageID = 0x123,
+    .MessageID = 0,
     .MessageSEQ = 0,
-    .ControlFlags = (setMCP251XFD_MessageCtrlFlags)(MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE),  // CAN-FD frame with BRS enabled
+    .ControlFlags = (setMCP251XFD_MessageCtrlFlags)(
+        MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE | MCP251XFD_EXTENDED_MESSAGE_ID),
     .DLC = MCP251XFD_DLC_2BYTE,
     .PayloadData = NULL,
 };
 
 bool volatile efis_connected = false;
-uint8_t RADbus_UID = 0xFF;
+uint8_t RADbus_UID = kRadbusUidUnassigned;
+uint8_t provisional_src = kRadbusUidUnassigned;
 uint32_t last_heartbeat = 0;
-uint32_t serial_num = 0xFF123456;
+// High byte = Device_type_FF (0xFF); low 24 bits = device unique ID. Set in CanbusInit().
+uint32_t serial_num = 0;
 
 uint32_t time_since_zulu;
 
@@ -83,6 +88,53 @@ static volatile bool can_rx_pending = false;
 
 static void IRAM_ATTR can_rx_gpio_isr(void* /*arg*/) { 
     can_rx_pending = true;
+}
+
+/**
+ * Build RADbus serial: 0xFFXXXXXX.
+ * Prefer a 24-bit fold of the manufacturing feed receiver ID (synced from Pico DeviceInfo).
+ * Fall back to ESP32 base MAC[3..5] if the feed ID is unset.
+ */
+static uint32_t build_radbus_serial_num() {
+    static const uint32_t kDeviceTypeFF = 0xFFu << 24;
+    static const uint32_t kUnique24Mask = 0x00FFFFFFu;
+
+    uint32_t unique24 = 0;
+    const uint8_t* rid = settings_manager.settings.feed_receiver_ids[0];
+    // feed_receiver_ids: [0]=0xBE [1]=0xE0 [2..7]=6-byte manufacturing UID (MSB first).
+    const bool rid_valid = (rid[0] == 0xBE && rid[1] == 0xE0)
+                           && (rid[2] | rid[3] | rid[4] | rid[5] | rid[6] | rid[7]) != 0;
+    if (rid_valid) {
+        // Fold 48-bit manufacturing UID into 24 bits so date + VVXXXX both contribute.
+        unique24 = SettingsManager::DeviceInfo::FoldReceiverIdToUnique24(rid);
+    } else {
+        ObjectDictionary::ESP32DeviceInfo esp_info = GetESP32DeviceInfo();
+        unique24 = ((uint32_t)esp_info.base_mac[3] << 16) | ((uint32_t)esp_info.base_mac[4] << 8)
+                   | (uint32_t)esp_info.base_mac[5];
+        CONSOLE_WARNING("RADbus", "feed_receiver_id unset; using ESP MAC for serial unique bits.");
+    }
+
+    return kDeviceTypeFF | (unique24 & kUnique24Mask);
+}
+
+/** FNV-1a fold of serial → provisional src in 0x80..0xFD while unassigned. */
+static uint8_t radbus_serial_src_hash(uint32_t serial) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < 4; i++) {
+        h ^= (serial >> (i * 8)) & 0xFFu;
+        h *= 16777619u;
+    }
+    h ^= h >> 16;
+    const uint8_t span = (uint8_t)(kProvisionalSrcMax - kProvisionalSrcMin + 1);
+    return (uint8_t)(kProvisionalSrcMin + (h % span));
+}
+
+/** Wire source UID: assigned UID when connected, else serial-derived provisional src. */
+static uint8_t radbus_tx_src() {
+    if (efis_connected) {
+        return RADbus_UID;
+    }
+    return provisional_src;
 }
 
 
@@ -163,8 +215,20 @@ void process_rx_msg()   {
         MCP251XFD_PAYLOAD_64BYTE,   // must match fifo_conf.h for FIFO1
         &ts,                        // NULL if you don't want timestamp, need to change in fifo_conf if i want to remove timestamp
         MCP251XFD_FIFO1);
+    if (e != ERR_OK) {
+        return;
+    }
 
-    switch (rx_message.MessageID)   {
+    const uint32_t arb_id = rx_message.MessageID;
+    const uint16_t msg_id = can_msg_of(arb_id);
+    const uint8_t dest = can_dest_of(arb_id);
+
+    // Soft dest filter: accept broadcast and frames addressed to our assigned UID.
+    if (dest != UID_BROADCAST && dest != RADbus_UID) {
+        return;
+    }
+
+    switch (msg_id)   {
         case (CANMSG_ADSB_OWNSHIP_STATE):   {
             memcpy(&time_since_zulu, &rx_data[0], sizeof(uint32_t));
             radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceRADbus;
@@ -196,15 +260,25 @@ void process_rx_msg()   {
             break;
         }
 
+        // DLC 5: [0]=UID (or 0x99 error), [1..4]=serial of assignee
         case (CANMSG_UID_ASSIGN):    {
-            if (rx_data[0] != 0x99) {
+            if (rx_message.DLC != MCP251XFD_DLC_5BYTE) {
+                break;
+            }
+            uint32_t assigned_serial = 0;
+            memcpy(&assigned_serial, &rx_data[1], sizeof(uint32_t));
+            if (assigned_serial != serial_num) {
+                break;
+            }
+            if (rx_data[0] != kClientAddErrorCode && rx_data[0] != UID_BROADCAST
+                && rx_data[0] != UID_MASTER && rx_data[0] != UID_PC
+                && rx_data[0] != kRadbusUidUnassigned) {
                 RADbus_UID = rx_data[0];
                 efis_connected = true;
                 radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceRADbus;
                 CONSOLE_INFO("RADbus", "UID assigned %i.", RADbus_UID);
             }   else    {
                 CONSOLE_ERROR("RADbus", "RADbus reached max clients, no client ID given.");
-                // TODO - handle this.
             }
             break;
         }
@@ -212,15 +286,17 @@ void process_rx_msg()   {
         case (CANMSG_DISCONNECT_CLIENT):    {
             if (rx_data[0] == RADbus_UID)   {
                 efis_connected = false;
-                RADbus_UID = 0xFF;
+                RADbus_UID = kRadbusUidUnassigned;
                 radbus_rx_position.source = SettingsManager::RxPosition::kPositionSourceNone;
                 gdl90.gnss_position_valid = false;
                 gdl90.utc_timing_is_valid = false;
+                CONSOLE_INFO("RADbus", "Disconnected by master.");
             }
+            break;
         }
 
         default:
-            return;
+            break;
     }
 }
 
@@ -229,12 +305,12 @@ void request_UID()  {
     memcpy(&UID_request[0], &serial_num, sizeof(uint32_t));
     memcpy(&UID_request[4], &ObjectDictionary::kFirmwareVersion, sizeof(uint32_t));
 
-    transmit_can(CANMSG_UID_REQUEST, MCP251XFD_DLC_8BYTE, &UID_request[0]);
+    transmit_can(CANMSG_UID_REQUEST, UID_MASTER, MCP251XFD_DLC_8BYTE, &UID_request[0]);
 }
 
 void send_heartbeat() {
     if (efis_connected) {
-        transmit_can(CANMSG_HEARTBEAT, MCP251XFD_DLC_1BYTE, &RADbus_UID);
+        transmit_can(CANMSG_HEARTBEAT, UID_MASTER, MCP251XFD_DLC_1BYTE, &RADbus_UID);
     } else {
         request_UID();
     }
@@ -243,6 +319,11 @@ void send_heartbeat() {
 
 
 bool CanbusIsInitialized() { return canbus_initialized; }
+
+void CanbusSetTermination(can_termination_t term_res_enable) {
+    gpio_set_level(CAN_TERM_ENABLE, term_res_enable);
+    CONSOLE_INFO("CAN", "Termination resistor %s.", term_res_enable == CAN_TERM_ON ? "ENABLED" : "DISABLED");
+}
 
 static const uint32_t kCANHeartbeatIntervalMs = 1000;
 
@@ -275,7 +356,7 @@ static void ReportCANModeSTraffic(uint32_t uid, uint8_t packet_type, const ModeS
             memcpy(&tx_buf[1], &uid, 4);
             memcpy(&tx_buf[5], &aircraft.callsign, 8);
             tx_buf[13] = aircraft.emitter_category;
-            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_IN, UID_BROADCAST, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
             break;
         }
 
@@ -304,7 +385,7 @@ static void ReportCANModeSTraffic(uint32_t uid, uint8_t packet_type, const ModeS
             memcpy(&tx_buf[5], &aircraft.latitude_deg, 4);
             memcpy(&tx_buf[9], &aircraft.longitude_deg, 4);
             memcpy(&tx_buf[13], &aircraft.baro_altitude_ft, 4);
-            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_IN, UID_BROADCAST, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
             break;
         }
 
@@ -315,7 +396,7 @@ static void ReportCANModeSTraffic(uint32_t uid, uint8_t packet_type, const ModeS
             memcpy(&tx_buf[5], &aircraft.direction_deg, 4);
             memcpy(&tx_buf[9], &aircraft.baro_vertical_rate_fpm, 4);
             memcpy(&tx_buf[13], &aircraft.speed_kts, 4);
-            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_IN, UID_BROADCAST, MCP251XFD_DLC_20BYTE, &tx_buf[0]);
             break;
         }
 
@@ -342,7 +423,7 @@ static void ReportCANUATTraffic(uint32_t uid, adsb_packet_type_t packet_type, co
             memcpy(&tx_buf[1], &uid, 4);
             memcpy(&tx_buf[5], &aircraft.callsign, 8);
             tx_buf[13] = aircraft.emitter_category;
-            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_IN, UID_BROADCAST, MCP251XFD_DLC_16BYTE, &tx_buf[0]);
             break;
         }
 
@@ -356,7 +437,7 @@ static void ReportCANUATTraffic(uint32_t uid, adsb_packet_type_t packet_type, co
             memcpy(&tx_buf[17], &aircraft.direction_deg, 4);
             memcpy(&tx_buf[21], &aircraft.baro_vertical_rate_fpm, 4);
             memcpy(&tx_buf[25], &aircraft.speed_kts, 4);
-            transmit_can(CANMSG_ADSB_AIRCRAFT_OUT, MCP251XFD_DLC_32BYTE, &tx_buf[0]);
+            transmit_can(CANMSG_ADSB_AIRCRAFT_IN, UID_BROADCAST, MCP251XFD_DLC_32BYTE, &tx_buf[0]);
             break;
         }
 
@@ -426,6 +507,13 @@ void ReportCANFromIngestedUATPacket(const DecodedUATADSBPacket& decoded_packet) 
 bool CanbusInit(can_termination_t term_res_enable) {
     CONSOLE_INFO("CAN_INIT", "Initializing MCP251863...");
 
+    serial_num = build_radbus_serial_num();
+    provisional_src = radbus_serial_src_hash(serial_num);
+    RADbus_UID = kRadbusUidUnassigned;
+    efis_connected = false;
+    CONSOLE_INFO("CAN_INIT", "RADbus serial=0x%08lX provisional_src=0x%02X",
+                 (unsigned long)serial_num, provisional_src);
+
     // Configure selectable termination resistor GPIO control
     gpio_config_t term_res_gpio = {
         .pin_bit_mask = (1ULL << CAN_TERM_ENABLE),
@@ -435,7 +523,7 @@ bool CanbusInit(can_termination_t term_res_enable) {
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&term_res_gpio);
-    gpio_set_level(CAN_TERM_ENABLE, term_res_enable);
+    CanbusSetTermination(term_res_enable);
     
     // Configure and drive standby pin to wake device
     gpio_config_t standby_gpio = {
@@ -465,7 +553,7 @@ bool CanbusInit(can_termination_t term_res_enable) {
     // Note: SPI bus initialization is handled by MCP251XFD_SPI_Init callback
     MCP251XFD_Config mcp_config = {
         // Controller clocks
-        .XtalFreq = 40000000,  // 40MHz crystal // TODO - Change to 40MHz crystal and update this in v2
+        .XtalFreq = 40000000,  // 40MHz crystal
         .OscFreq = 0,          // Not using external oscillator
         .SysclkConfig = MCP251XFD_SYSCLK_IS_CLKIN,  // SYSCLK = CLKIN (no PLL) = 40MHz
         .ClkoPinConfig = MCP251XFD_CLKO_DivBy10,
@@ -524,43 +612,44 @@ bool CanbusInit(can_termination_t term_res_enable) {
         Ext1_FIFO1_RAMInfos.RAMStartAddress,
         Ext1_FIFO2_RAMInfos.RAMStartAddress);
     
-    // Hardware RX filter: only the four RADbus IDs handled in process_rx_msg().
+    // Hardware RX filter: match message type only in packed 29-bit EXT IDs (src/dest ignored).
+    // Destination filtering is done in software in process_rx_msg().
     MCP251XFD_Filter radbus_rx_filters[] = {
         {
             .Filter = MCP251XFD_FILTER0,
             .EnableFilter = true,
-            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .Match = MCP251XFD_MATCH_ONLY_EID,
             .PointTo = MCP251XFD_FIFO1,
-            .AcceptanceID = CANMSG_ADSB_OWNSHIP_STATE,
-            .AcceptanceMask = MCP251XFD_SID_Mask,
-            .ExtendedID = false,
+            .AcceptanceID = can_pack_id(CANMSG_ADSB_OWNSHIP_STATE, 0, 0),
+            .AcceptanceMask = kCanMsgTypeFilterMask,
+            .ExtendedID = true,
         },
         {
             .Filter = MCP251XFD_FILTER1,
             .EnableFilter = true,
-            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .Match = MCP251XFD_MATCH_ONLY_EID,
             .PointTo = MCP251XFD_FIFO1,
-            .AcceptanceID = CANMSG_ADSB_OWNSHIP_IDENT,
-            .AcceptanceMask = MCP251XFD_SID_Mask,
-            .ExtendedID = false,
+            .AcceptanceID = can_pack_id(CANMSG_ADSB_OWNSHIP_IDENT, 0, 0),
+            .AcceptanceMask = kCanMsgTypeFilterMask,
+            .ExtendedID = true,
         },
         {
             .Filter = MCP251XFD_FILTER2,
             .EnableFilter = true,
-            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .Match = MCP251XFD_MATCH_ONLY_EID,
             .PointTo = MCP251XFD_FIFO1,
-            .AcceptanceID = CANMSG_UID_ASSIGN,
-            .AcceptanceMask = MCP251XFD_SID_Mask,
-            .ExtendedID = false,
+            .AcceptanceID = can_pack_id(CANMSG_UID_ASSIGN, 0, 0),
+            .AcceptanceMask = kCanMsgTypeFilterMask,
+            .ExtendedID = true,
         },
         {
             .Filter = MCP251XFD_FILTER3,
             .EnableFilter = true,
-            .Match = MCP251XFD_MATCH_ONLY_SID,
+            .Match = MCP251XFD_MATCH_ONLY_EID,
             .PointTo = MCP251XFD_FIFO1,
-            .AcceptanceID = CANMSG_DISCONNECT_CLIENT,
-            .AcceptanceMask = MCP251XFD_SID_Mask,
-            .ExtendedID = false,
+            .AcceptanceID = can_pack_id(CANMSG_DISCONNECT_CLIENT, 0, 0),
+            .AcceptanceMask = kCanMsgTypeFilterMask,
+            .ExtendedID = true,
         },
     };
 
@@ -573,9 +662,9 @@ bool CanbusInit(can_termination_t term_res_enable) {
         CONSOLE_ERROR("CAN_INIT", "Failed to configure filter list: Error code %d", filter_result);
         return false;
     }
-    CONSOLE_INFO("CAN_INIT", "RX filters: 0x%03X, 0x%03X, 0x%03X, 0x%03X",
+    CONSOLE_INFO("CAN_INIT", "RX EXT filters: msg 0x%03X/0x%03X/0x%03X/0x%03X (provisional_src=0x%02X)",
                  CANMSG_ADSB_OWNSHIP_STATE, CANMSG_ADSB_OWNSHIP_IDENT, CANMSG_UID_ASSIGN,
-                 CANMSG_DISCONNECT_CLIENT);
+                 CANMSG_DISCONNECT_CLIENT, provisional_src);
     
     // Start CAN bus in CAN-FD mode
     eERRORRESULT start_result = MCP251XFD_StartCANFD(&MCP251XFD_Ext1);
@@ -609,11 +698,13 @@ bool CanbusInit(can_termination_t term_res_enable) {
 
 
 
-void transmit_can(uint32_t canID, eMCP251XFD_DataLength DLC, uint8_t *data) {
+void transmit_can(uint16_t msg_type, uint8_t dest, eMCP251XFD_DataLength DLC, uint8_t *data) {
 
-    tx_message.MessageID = canID;
+    tx_message.MessageID = can_pack_id(msg_type, radbus_tx_src(), dest);
     tx_message.DLC = DLC;
     tx_message.PayloadData = data;
+    tx_message.ControlFlags = (setMCP251XFD_MessageCtrlFlags)(
+        MCP251XFD_CANFD_FRAME | MCP251XFD_SWITCH_BITRATE | MCP251XFD_EXTENDED_MESSAGE_ID);
 
     eERRORRESULT tx_result = MCP251XFD_TransmitMessageToFIFO(
         &MCP251XFD_Ext1,

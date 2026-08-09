@@ -13,7 +13,7 @@
 #include "pico/rand.h"
 #endif
 
-static constexpr uint32_t kSettingsVersion = 12;  // Change this when settings format changes!
+static constexpr uint32_t kSettingsVersion = 13;  // Change this when settings format changes!
 static constexpr uint32_t kDeviceInfoVersion = 2;
 
 class SettingsManager {
@@ -209,6 +209,11 @@ class SettingsManager {
         // Receiver position settings
         RxPosition rx_position;
 
+        // CAN / RADbus settings
+        // Logical enable: 0 = termination resistor off (default), non-zero = on.
+        // Stored as uint32_t for stable Settings layout / SPI size across processors.
+        uint32_t can_termination_enabled = 0;
+
         /**
          * Default constructor.
          */
@@ -221,7 +226,7 @@ class SettingsManager {
                 device_info.GetDefaultSSID(core_network_settings.wifi_ap_ssid);
                 // Reuse the WiFi SSID as the hostname.
                 strncpy(core_network_settings.hostname, core_network_settings.wifi_ap_ssid, 32);
-                snprintf(core_network_settings.wifi_ap_password, kWiFiPasswordMaxLen, "fishfinder");
+                snprintf(core_network_settings.wifi_ap_password, kWiFiPasswordMaxLen, "radaero83");
             }
 
             core_network_settings.wifi_ap_channel =
@@ -309,17 +314,32 @@ class SettingsManager {
             }
         }
 
-        static constexpr uint16_t kDefaultSSIDLenChars = 14;  // RADaero-VVXXXX
+        static constexpr uint16_t kDefaultSSIDLenChars = 15;  // RADaero-XXXXXX (6 hex digits)
+
+        /**
+         * Fold the 6-byte manufacturing UID from a feed receiver ID into a 24-bit unique value.
+         * Same algorithm used for RADbus serial unique bits (0xFFXXXXXX).
+         * @param[in] rid 8-byte feed receiver ID (0xBE 0xE0 + 6-byte UID).
+         * @retval 24-bit unique value.
+         */
+        static uint32_t FoldReceiverIdToUnique24(const uint8_t* rid) {
+            const uint32_t hi = ((uint32_t)rid[2] << 16) | ((uint32_t)rid[3] << 8) | (uint32_t)rid[4];
+            const uint32_t lo = ((uint32_t)rid[5] << 16) | ((uint32_t)rid[6] << 8) | (uint32_t)rid[7];
+            return (hi ^ lo) & 0x00FFFFFFu;
+        }
+
         /**
          * Writes a default value for a network SSID to a buffer. The buffer must be at least kDefaultSSIDLenChars+1 so
-         * that there is space for an end of string character. This default network SSID value is intended to not
-         * conflict with any other ADSBee devices or future Pants for Birds products.
+         * that there is space for an end of string character. Format is RADaero-XXXXXX where XXXXXX is the same 24-bit
+         * unique hex value used in the RADbus serial number. Intended not to conflict with any other ADSBee devices or
+         * future Pants for Birds products.
          * @param[out] buf Buffer to write the network SSID to.
          */
         void GetDefaultSSID(char* buf) {
-            memcpy(buf, "RADaero-", 8);       // [0:7] ADSBee1090-
-            memcpy(buf + 8, part_code + 20, 6);  // [18:23] VVXXXX
-            buf[kDefaultSSIDLenChars] = '\0';
+            uint8_t rid[Settings::kFeedReceiverIDNumBytes];
+            GetDefaultFeedReceiverID(rid);
+            snprintf(buf, kDefaultSSIDLenChars + 1, "RADaero-%06lX",
+                     (unsigned long)FoldReceiverIdToUnique24(rid));
         }
 
         /**

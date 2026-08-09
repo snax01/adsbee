@@ -43,6 +43,9 @@ SettingsManager::RxPosition& GetRadbusRxPosition();
 bool CanbusInit(can_termination_t term_res_enable);
 bool CanbusIsInitialized();
 
+/** Update termination resistor GPIO. Safe to call after CanbusInit(). */
+void CanbusSetTermination(can_termination_t term_res_enable);
+
 /** Poll RADbus RX and send heartbeat / UID request. Call from ADSBeeServer::Update(). */
 void CanbusUpdate();
 
@@ -57,7 +60,11 @@ void ReportCANFromIngestedModeSPacket(const DecodedModeSPacket& decoded_packet);
  */
 void ReportCANFromIngestedUATPacket(const DecodedUATADSBPacket& decoded_packet);
 
-void transmit_can(uint32_t canID, eMCP251XFD_DataLength DLC, uint8_t* data);
+/**
+ * Transmit a RADbus message using a packed 29-bit extended ID
+ * (msg type + this device's TX src + dest).
+ */
+void transmit_can(uint16_t msg_type, uint8_t dest, eMCP251XFD_DataLength DLC, uint8_t* data);
 void check_can_errors();
 void send_heartbeat();
 void request_UID();

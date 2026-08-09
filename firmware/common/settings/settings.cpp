@@ -24,6 +24,9 @@ void SettingsManager::Print() {
                               settings.subg_bias_tee_enabled ? "ENABLED" : "DISABLED");
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
                               "\tWatchdog Timeout: %lu seconds\r\n", settings.watchdog_timeout_sec);
+    print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len,
+                              "\tCAN Termination Resistor: %s\r\n",
+                              settings.can_termination_enabled ? "ENABLED" : "DISABLED");
     print_buf_len += snprintf(print_buf + print_buf_len, sizeof(print_buf) - print_buf_len, "\tLog Level: %s\r\n",
                               kConsoleLogLevelStrs[settings.log_level]);
     CONSOLE_PRINTF("%s", print_buf);
@@ -128,6 +131,9 @@ void SettingsManager::PrintAT() {
 
     // AT+BIAS_TEE_ENABLE
     CONSOLE_PRINTF("AT+BIAS_TEE_ENABLE=%d\r\n", settings.r1090_bias_tee_enabled);
+
+    // AT+CAN_TERM
+    CONSOLE_PRINTF("AT+CAN_TERM=%lu\r\n", (unsigned long)settings.can_termination_enabled);
 
     // AT+DEVICE_INFO: Don't store this.
 

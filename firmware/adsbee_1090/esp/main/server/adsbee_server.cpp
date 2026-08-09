@@ -117,7 +117,8 @@ bool ADSBeeServer::Init() {
     settings_manager.Print();
     settings_manager.Apply();
 
-    if (!CanbusInit(CAN_TERM_ON)) {
+    const can_termination_t can_term = settings_manager.settings.can_termination_enabled ? CAN_TERM_ON : CAN_TERM_OFF;
+    if (!CanbusInit(can_term)) {
         CONSOLE_WARNING("ADSBeeServer::Init", "CAN bus initialization failed; CAN output disabled.");
     }
 

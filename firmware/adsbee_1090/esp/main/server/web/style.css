@@ -34,8 +34,8 @@ body {
     color: #991b1b;
 }
 
-/* Wi‑Fi AP fields (between status and tools) */
-.wifi-settings {
+/* Settings cards (Wi‑Fi, CAN, etc.) */
+.settings-card {
     width: 100%;
     max-width: 420px;
     margin: 0 auto 1rem;
@@ -46,7 +46,7 @@ body {
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
 }
 
-.wifi-settings-heading {
+.settings-card-heading {
     margin: 0 0 0.5rem;
     font-size: 1.05rem;
     font-weight: 700;
@@ -54,7 +54,7 @@ body {
     letter-spacing: 0.02em;
 }
 
-.wifi-settings-intro {
+.settings-card-intro {
     margin: 0 0 1rem;
     font-size: 0.875rem;
     line-height: 1.45;
@@ -68,24 +68,42 @@ body {
     margin-bottom: 0.65rem;
 }
 
-.wifi-save-row {
-    display: flex;
-    justify-content: center;
-    margin-top: 0.35rem;
-    margin-bottom: 0.35rem;
-}
-
-.wifi-save-row .tools-button {
-    width: 100%;
-    max-width: 220px;
-    margin: 6px 0;
-}
-
-.wifi-field-row label {
+.wifi-field-row > label {
     flex: 0 0 5.5rem;
     font-size: 0.9rem;
     font-weight: 600;
     color: #334155;
+}
+
+.can-term-row {
+    display: flex;
+    align-items: center;
+}
+
+.radio-group {
+    display: flex;
+    align-items: center;
+    gap: 1.25rem;
+}
+
+.radio-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex: 0 0 auto;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #334155;
+    cursor: pointer;
+}
+
+.radio-option input[type="radio"] {
+    flex: 0 0 auto;
+    width: 1rem;
+    height: 1rem;
+    margin: 0;
+    accent-color: #334155;
+    cursor: pointer;
 }
 
 .password-input-wrap {

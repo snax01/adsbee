@@ -147,6 +147,33 @@ CPP_AT_CALLBACK(CommsManager::ATBiasTeeEnableCallback) {
     CPP_AT_ERROR("Operator '%c' not supported.", op);
 }
 
+CPP_AT_CALLBACK(CommsManager::ATCanTermCallback) {
+    switch (op) {
+        case '?':
+            CPP_AT_CMD_PRINTF("=%lu", (unsigned long)settings_manager.settings.can_termination_enabled);
+            CPP_AT_SILENT_SUCCESS();
+            break;
+        case '=': {
+            if (!CPP_AT_HAS_ARG(0)) {
+                CPP_AT_ERROR("Requires an argument (0 or 1). AT+CAN_TERM=<enabled>");
+            }
+            uint32_t enabled;
+            CPP_AT_TRY_ARG2NUM(0, enabled);
+            if (enabled > 1) {
+                CPP_AT_ERROR("Invalid argument %lu. AT+CAN_TERM=<enabled> where enabled is 0 or 1.",
+                             (unsigned long)enabled);
+            }
+            settings_manager.settings.can_termination_enabled = enabled;
+            settings_manager.SyncToCoprocessors();
+            CPP_AT_CMD_PRINTF(": can_termination_enabled: %lu\r\n",
+                              (unsigned long)settings_manager.settings.can_termination_enabled);
+            CPP_AT_SUCCESS();
+            break;
+        }
+    }
+    CPP_AT_ERROR("Operator '%c' not supported.", op);
+}
+
 CPP_AT_CALLBACK(CommsManager::ATBootloader) {
     switch (op) {
         case '=': {
@@ -1320,6 +1347,12 @@ const CppAT::ATCommandDef_t at_command_list[] = {
                     "ADSBee\r\n\t"
                     "AT+BOOT_USB_UF2=1DEADBEE",
      .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATBootloader, comms_manager)},
+    {.command = "CAN_TERM",
+     .min_args = 0,
+     .max_args = 1,
+     .help_string = "AT+CAN_TERM=<enabled [0 1]>\r\n\tEnable or disable the CAN bus termination "
+                    "resistor.\r\n\tAT+CAN_TERM?\r\n\tQuery the CAN termination resistor setting.",
+     .callback = CPP_AT_BIND_MEMBER_CALLBACK(CommsManager::ATCanTermCallback, comms_manager)},
     {.command = "DEVICE_INFO",
      .min_args = 0,
      .max_args = 5,  // TODO: check this value.

@@ -12,9 +12,9 @@
     <div class="page">
         <div id="status" class="connection-status disconnected">Disconnected</div>
 
-        <div class="wifi-settings column-element">
-            <h2 class="wifi-settings-heading">WIFI Access Point</h2>
-            <p class="wifi-settings-intro">Connect your panel mounted devices, phone, tablet or portable GPS to this network to receive ADSB traffic.</p>
+        <div class="settings-card column-element">
+            <h2 class="settings-card-heading">WIFI Access Point</h2>
+            <p class="settings-card-intro">Connect your panel mounted devices, phone, tablet or portable GPS to this network to receive ADSB traffic.</p>
             <div class="wifi-field-row">
                 <label for="wifiSsid">SSID:</label>
                 <input type="text" id="wifiSsid" name="wifiSsid" autocomplete="off" spellcheck="false">
@@ -26,16 +26,30 @@
                     <button id="togglePasswordButton" class="password-toggle" type="button" aria-label="Show password" title="Show password">👁</button>
                 </div>
             </div>
-            <div class="wifi-save-row">
-                <button id="saveSettingsButton" class="tools-button" type="button">
-                    Save Settings
-                </button>
-            </div>
             <p id="wifiValidationError" class="wifi-validation-error" role="alert" hidden></p>
+        </div>
+
+        <div class="settings-card column-element">
+            <h2 class="settings-card-heading" id="canTermLabel">CAN Termination</h2>
+            <div class="can-term-row">
+                <div class="radio-group" role="radiogroup" aria-labelledby="canTermLabel">
+                    <label class="radio-option">
+                        <input type="radio" name="canTerm" id="canTermOff" value="0" checked>
+                        Off
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="canTerm" id="canTermOn" value="1">
+                        On
+                    </label>
+                </div>
+            </div>
         </div>
 
         <div class="tools-container column-element">
             <div class="button-row">
+                <button id="saveSettingsButton" class="tools-button" type="button">
+                    Save Settings
+                </button>
                 <button id="uploadButton" class="tools-button" type="button">
                     Update Firmware
                 </button>
@@ -918,6 +932,35 @@
                 }
             }
 
+            async function loadCanTermSettings() {
+                let adsbee = null;
+                try {
+                    adsbee = new ADSBeeAT(HOST_URI);
+                    await adsbee.connect();
+                    const response = await adsbee.sendCmd('AT+CAN_TERM?\r\n', 0, true, true, 'CAN_TERM=');
+                    const canTermLine = response.find(line => line.includes('CAN_TERM='));
+                    if (!canTermLine) {
+                        return;
+                    }
+
+                    const match = canTermLine.match(/CAN_TERM=(\d+)/);
+                    if (!match) {
+                        console.warn('Unexpected CAN_TERM response format:', canTermLine);
+                        return;
+                    }
+
+                    const enabled = match[1] === '1';
+                    document.getElementById('canTermOn').checked = enabled;
+                    document.getElementById('canTermOff').checked = !enabled;
+                } catch (error) {
+                    console.warn('Failed to query CAN_TERM settings:', error);
+                } finally {
+                    if (adsbee) {
+                        await adsbee.disconnect();
+                    }
+                }
+            }
+
             wifiSsidInput.addEventListener('input', clearWifiValidationError);
             wifiPasswordInput.addEventListener('input', clearWifiValidationError);
 
@@ -939,10 +982,14 @@
                     return;
                 }
                 clearWifiValidationError();
+                const canTermEnabled = document.querySelector('input[name="canTerm"]:checked')?.value ?? '0';
                 const wifiCmd = `AT+WIFI_AP=1,${ssid},${password}`;
+                const canTermCmd = `AT+CAN_TERM=${canTermEnabled}`;
                 const saveCmd = 'AT+SETTINGS=SAVE';
                 appendToTerminal(`> ${wifiCmd}\n`);
                 consoleWebSocket.send(`${wifiCmd}\r\n`);
+                appendToTerminal(`> ${canTermCmd}\n`);
+                consoleWebSocket.send(`${canTermCmd}\r\n`);
                 appendToTerminal(`> ${saveCmd}\n`);
                 consoleWebSocket.send(`${saveCmd}\r\n`);
             });
@@ -953,6 +1000,7 @@
             });
 
             loadWifiAccessPointSettings();
+            loadCanTermSettings();
         });
     </script>
 </body>
